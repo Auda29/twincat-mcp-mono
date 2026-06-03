@@ -1,3 +1,5 @@
+![Pi TwinCAT ADS Extension](./logo.png)
+
 # twincat-mcp
 
 Official TwinCAT MCP monorepo for ADS-backed packages:

@@ -1,3 +1,5 @@
+![Pi TwinCAT ADS Extension](./logo.png)
+
 # pi-twincat-ads
 
 Pi extension for reading, watching, and safely writing TwinCAT PLC values over
