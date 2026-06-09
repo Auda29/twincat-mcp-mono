@@ -1029,13 +1029,14 @@ export async function main(): Promise<void> {
 export function isCliEntryPoint(
   argvPath: string | undefined = process.argv[1],
   modulePath: string = fileURLToPath(import.meta.url),
+  resolveRealPath: (path: string) => string = realpathSync,
 ): boolean {
   if (argvPath === undefined) {
     return false;
   }
 
   try {
-    return realpathSync(argvPath) === realpathSync(modulePath);
+    return resolveRealPath(argvPath) === resolveRealPath(modulePath);
   } catch {
     return argvPath === modulePath;
   }

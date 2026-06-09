@@ -1,6 +1,6 @@
 {
   "name": "twincat-mcp-core",
-  "version": "0.4.7",
+  "version": "0.4.8",
   "description": "Transport-agnostic TwinCAT ADS core runtime.",
   "license": "MIT",
   "type": "module",

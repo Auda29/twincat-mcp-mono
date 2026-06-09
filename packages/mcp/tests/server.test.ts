@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   callMcpTool,
@@ -27,14 +26,11 @@ describe("CLI metadata", () => {
   });
 
   it("detects npm bin symlinks as CLI entry points", () => {
-    const tempDir = mkdtempSync(join(tmpdir(), "twincat-mcp-bin-"));
-    const target = resolve(tempDir, "dist-index.js");
-    const link = resolve(tempDir, "twincat-mcp");
+    const target = "/project/packages/mcp/dist/index.js";
+    const link = "/project/node_modules/.bin/twincat-mcp";
+    const resolveRealPath = (path: string) => (path === link ? target : path);
 
-    writeFileSync(target, "");
-    symlinkSync(target, link);
-
-    expect(isCliEntryPoint(link, target)).toBe(true);
+    expect(isCliEntryPoint(link, target, resolveRealPath)).toBe(true);
   });
 });
 
