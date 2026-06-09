@@ -1,10 +1,42 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import {
   callMcpTool,
+  formatCliHelp,
+  formatCliVersion,
+  isCliEntryPoint,
   createMcpToolDefinitions,
 } from "../src/index.js";
 import type { TwinCatAdsRuntime } from "twincat-mcp-core";
+
+const packageJson = JSON.parse(
+  readFileSync(resolve(process.cwd(), "package.json"), "utf8"),
+) as { version: string };
+
+describe("CLI metadata", () => {
+  it("prints the package version for version flags", () => {
+    expect(formatCliVersion()).toBe(packageJson.version);
+  });
+
+  it("prints usage for help flags", () => {
+    expect(formatCliHelp()).toContain("Usage:");
+    expect(formatCliHelp()).toContain("twincat-mcp [--config <file>]");
+  });
+
+  it("detects npm bin symlinks as CLI entry points", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "twincat-mcp-bin-"));
+    const target = resolve(tempDir, "dist-index.js");
+    const link = resolve(tempDir, "twincat-mcp");
+
+    writeFileSync(target, "");
+    symlinkSync(target, link);
+
+    expect(isCliEntryPoint(link, target)).toBe(true);
+  });
+});
 
 function createRuntimeStub(
   overrides: Partial<Record<keyof TwinCatAdsRuntime, unknown>> = {},

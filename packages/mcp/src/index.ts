@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
+import { readFileSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -25,7 +26,54 @@ import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 
 export const packageName = "twincat-mcp";
-export const packageVersion = "0.4.0";
+
+function readPackageVersion(): string {
+  const packageJsonPath = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../package.json",
+  );
+  const packageJson = JSON.parse(
+    readFileSync(packageJsonPath, "utf8"),
+  ) as { version?: string };
+  return packageJson.version ?? "0.0.0";
+}
+
+export const packageVersion = readPackageVersion();
+
+export function formatCliVersion(): string {
+  return packageVersion;
+}
+
+export function formatCliHelp(): string {
+  return [
+    `${packageName} ${packageVersion}`,
+    "",
+    "Usage:",
+    "  twincat-mcp [--config <file>]",
+    "",
+    "Options:",
+    "  --config <file>  Read TwinCAT ADS connection config from a JSON file.",
+    "  --help, -h       Show this help text.",
+    "  --version, -v    Show the package version.",
+  ].join("\n");
+}
+
+export function handleCliMetadataArgs(
+  argv: readonly string[] = process.argv.slice(2),
+  writeOutput: (message: string) => void = console.log,
+): boolean {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    writeOutput(formatCliHelp());
+    return true;
+  }
+
+  if (argv.includes("--version") || argv.includes("-v")) {
+    writeOutput(formatCliVersion());
+    return true;
+  }
+
+  return false;
+}
 
 const symbolNameSchema = z
   .string()
@@ -968,14 +1016,29 @@ export async function loadConfigInput(
 }
 
 export async function main(): Promise<void> {
+  if (handleCliMetadataArgs()) {
+    return;
+  }
+
   const config = await loadConfigInput();
   const runtime = createRuntimeFromConfig(config);
   const server = createMcpServer(runtime);
   await server.connect(new StdioServerTransport());
 }
 
-function isCliEntryPoint(): boolean {
-  return process.argv[1] === fileURLToPath(import.meta.url);
+export function isCliEntryPoint(
+  argvPath: string | undefined = process.argv[1],
+  modulePath: string = fileURLToPath(import.meta.url),
+): boolean {
+  if (argvPath === undefined) {
+    return false;
+  }
+
+  try {
+    return realpathSync(argvPath) === realpathSync(modulePath);
+  } catch {
+    return argvPath === modulePath;
+  }
 }
 
 if (isCliEntryPoint()) {
