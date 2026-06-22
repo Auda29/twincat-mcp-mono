@@ -7,6 +7,39 @@ historischer Kontext erhalten.
 
 ## Tasks
 
+## Phase 4: Skill-Aktualisierung fuer Engineering-Tools
+
+### 26. Mitgelieferte Skills auf `0.5.0` Engineering-Tooling aktualisieren `[Open]`
+
+- Pi-Skill `packages/pi/skills/twincat-ads/SKILL.md` um die seit `0.5.0`
+  ausgelieferten read-only Engineering-Tools ergaenzen.
+- MCP-Skill `packages/mcp/skills/twincat-mcp-ads/SKILL.md` analog erweitern,
+  inklusive Toolnamen und empfohlenem Workflow fuer MCP-Agenten.
+- Agent-neutralen Skill `packages/skills/twincat-xae-project-guidelines`
+  auf Konsistenz mit tool-unterstuetztem read-only Projektkontext pruefen.
+- Alte Formulierungen entfernen oder praezisieren, die Engineering-Fehlerlisten,
+  Build-Ausgaben, POU-/Code-Kontext, I/O-Topologie oder HMI-Kontext noch als
+  "spaetere Phase" darstellen.
+- Read-only Engineering-Tools klar von ADS-Runtime-Reads und schreibenden oder
+  online-wirksamen XAE-Aktionen abgrenzen.
+- Folgende Toolgruppen dokumentieren:
+  - Workbench-/Projektkontext: `tc_list_workbenches`, `tc_list_projects`,
+    `tc_project_state`
+  - Engineering-Build und Fehlerkontext: `tc_build_project`,
+    `plc_build_project`, `tc_build_and_get_errors`, `tc_error_list`,
+    `tc_error_context`, `tc_output_read`
+  - Resource-URIs: `tc_resource_read` fuer `plcc://`, `err://`, `io://`,
+    `tcfile://`, `tcfolder://`
+  - HMI-Kontext: `hmi_state`, `hmi_list_projects`, `hmi_preview_info`,
+    `hmi_list_controls`
+  - SysManager/I/O: `tc_tree_read`, `tc_tree_search`,
+    `tc_tree_describe_item`, `io_list_topology`, `io_describe_device`,
+    `io_describe_terminal`
+  - PLC-Codekontext: `plc_list_pous`, `plc_read_pou`, `plc_search_code`,
+    `plc_describe_pou`, `plc_list_libraries`, `plc_describe_library`
+- Packaging-Sync pruefen: shared `twincat-xae-project-guidelines` muss weiterhin
+  beim Packen konsistent in Pi- und MCP-Paket erscheinen.
+
 ## Phase 3: XAE-Engineering-, Projekt- und Code-Kontext
 
 Diese Phase orientiert sich an den CoAgent-Rechercheergebnissen, bleibt aber
