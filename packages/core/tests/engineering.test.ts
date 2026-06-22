@@ -166,4 +166,218 @@ describe("engineering project context", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("reads PLC POUs, code text, and library references from PLC project files", () => {
+    const root = mkdtempSync(join(tmpdir(), "twincat-engineering-plc-"));
+    mkdirSync(join(root, "POUs"), { recursive: true });
+    mkdirSync(join(root, "GVLs"), { recursive: true });
+    mkdirSync(join(root, "DUTs"), { recursive: true });
+
+    const projectPath = join(root, "PlcProject.plcproj");
+    const mainPath = join(root, "POUs", "MAIN.TcPOU");
+    const fbPath = join(root, "POUs", "FB_Valve.TcPOU");
+    const functionPath = join(root, "POUs", "F_Calc.TcPOU");
+    const gvlPath = join(root, "GVLs", "GVL_Machine.TcGVL");
+    const dutPath = join(root, "DUTs", "ST_Status.TcDUT");
+
+    writeFileSync(
+      projectPath,
+      [
+        "<Project>",
+        "  <ItemGroup>",
+        '    <Compile Include="POUs\\MAIN.TcPOU" />',
+        '    <Compile Include="POUs\\FB_Valve.TcPOU" />',
+        '    <Compile Include="POUs\\F_Calc.TcPOU" />',
+        '    <Compile Include="GVLs\\GVL_Machine.TcGVL" />',
+        '    <Compile Include="DUTs\\ST_Status.TcDUT" />',
+        '    <PlaceholderReference Include="Tc2_Standard" Version="3.3.3.0" Namespace="Tc2_Standard" />',
+        "  </ItemGroup>",
+        "</Project>",
+      ].join("\n"),
+    );
+    writeFileSync(
+      fbPath,
+      [
+        "<TcPlcObject>",
+        '  <POU Name="FB_Valve" SpecialFunc="None">',
+        "    <Declaration><![CDATA[FUNCTION_BLOCK FB_Valve",
+        "VAR_INPUT",
+        "  bOpen : BOOL;",
+        "END_VAR]]></Declaration>",
+        "    <Implementation>",
+        "      <ST><![CDATA[]]></ST>",
+        "    </Implementation>",
+        '    <Method Name="Reset">',
+        "      <Declaration><![CDATA[METHOD Reset : BOOL",
+        "VAR_INPUT",
+        "  bForce : BOOL;",
+        "END_VAR]]></Declaration>",
+        "      <Implementation>",
+        "        <ST><![CDATA[Reset := bForce;]]></ST>",
+        "      </Implementation>",
+        "    </Method>",
+        "  </POU>",
+        "</TcPlcObject>",
+      ].join("\n"),
+    );
+    writeFileSync(
+      functionPath,
+      [
+        "<TcPlcObject>",
+        '  <POU Name="F_Calc" SpecialFunc="None">',
+        "    <Declaration><![CDATA[FUNCTION F_Calc : INT",
+        "VAR_INPUT",
+        "  nValue : INT;",
+        "END_VAR]]></Declaration>",
+        "    <Implementation>",
+        "      <ST><![CDATA[F_Calc := nValue + 1;]]></ST>",
+        "    </Implementation>",
+        "  </POU>",
+        "</TcPlcObject>",
+      ].join("\n"),
+    );
+    writeFileSync(
+      mainPath,
+      [
+        "<TcPlcObject>",
+        '  <POU Name="MAIN" SpecialFunc="PROGRAM">',
+        "    <Declaration><![CDATA[PROGRAM MAIN",
+        "VAR",
+        "  fbValve : FB_Valve;",
+        "END_VAR]]></Declaration>",
+        "    <Implementation>",
+        "      <ST><![CDATA[fbValve.Open();]]></ST>",
+        "    </Implementation>",
+        "  </POU>",
+        "</TcPlcObject>",
+      ].join("\n"),
+    );
+    writeFileSync(
+      gvlPath,
+      [
+        "<TcPlcObject>",
+        '  <GVL Name="GVL_Machine">',
+        "    <Declaration><![CDATA[VAR_GLOBAL",
+        "  bReady : BOOL;",
+        "END_VAR]]></Declaration>",
+        "  </GVL>",
+        "</TcPlcObject>",
+      ].join("\n"),
+    );
+    writeFileSync(
+      dutPath,
+      [
+        "<TcPlcObject>",
+        '  <DUT Name="ST_Status">',
+        "    <Declaration><![CDATA[TYPE ST_Status :",
+        "STRUCT",
+        "  nCode : INT;",
+        "END_STRUCT",
+        "END_TYPE]]></Declaration>",
+        "  </DUT>",
+        "</TcPlcObject>",
+      ].join("\n"),
+    );
+
+    const engineering = new EngineeringService({
+      enabled: true,
+      backend: "configuredProjectFiles",
+      workbenchName: "Machine",
+      projectFiles: [{ path: projectPath, type: "plc" }],
+    });
+
+    try {
+      const pous = engineering.plcListPous();
+      expect(pous.pous.map((pou) => pou.name).sort()).toEqual([
+        "FB_Valve",
+        "F_Calc",
+        "GVL_Machine",
+        "MAIN",
+        "Reset",
+        "ST_Status",
+      ]);
+      expect(pous.pous.find((pou) => pou.name === "MAIN")).toMatchObject({
+        kind: "program",
+      });
+      expect(pous.pous.find((pou) => pou.name === "FB_Valve")).toMatchObject({
+        kind: "functionBlock",
+      });
+      expect(pous.pous.find((pou) => pou.name === "F_Calc")).toMatchObject({
+        kind: "function",
+      });
+      expect(pous.pous.find((pou) => pou.name === "Reset")).toMatchObject({
+        qualifiedName: "FB_Valve.Reset",
+        kind: "method",
+      });
+
+      const functionBlocks = engineering.plcListPous({
+        kind: "functionBlock",
+      });
+      expect(functionBlocks.pous.map((pou) => pou.name)).toEqual(["FB_Valve"]);
+
+      const methods = engineering.plcListPous({ kind: "method" });
+      expect(methods.pous.map((pou) => pou.qualifiedName)).toEqual([
+        "FB_Valve.Reset",
+      ]);
+
+      const main = engineering.plcReadPou({ pou: "MAIN" });
+      expect(main.pou.declaration).toContain("PROGRAM MAIN");
+      expect(main.pou.implementation).toContain("fbValve.Open");
+
+      const reset = engineering.plcReadPou({ pou: "FB_Valve.Reset" });
+      expect(reset.pou.declaration).toContain("METHOD Reset");
+      expect(reset.pou.implementation).toContain("Reset := bForce");
+
+      const matches = engineering.plcSearchCode({ query: "fbValve" });
+      expect(matches.matches[0]).toMatchObject({
+        pou: { name: "MAIN" },
+        section: "declaration",
+      });
+
+      const limitedMatches = engineering.plcSearchCode({
+        query: "fbValve.Open",
+        limit: 1,
+      });
+      expect(limitedMatches).toMatchObject({
+        count: 1,
+        truncated: false,
+      });
+
+      const fbMatches = engineering.plcSearchCode({
+        query: "bOpen",
+        kind: "functionBlock",
+      });
+      expect(fbMatches.matches[0]).toMatchObject({
+        pou: { name: "FB_Valve", kind: "functionBlock" },
+      });
+
+      const methodMatches = engineering.plcSearchCode({
+        query: "bForce",
+        kind: "method",
+      });
+      expect(methodMatches.matches[0]).toMatchObject({
+        pou: { qualifiedName: "FB_Valve.Reset", kind: "method" },
+      });
+
+      const description = engineering.plcDescribePou({ pou: "GVL_Machine" });
+      expect(description).toMatchObject({
+        pou: { kind: "gvl" },
+        declarationLineCount: 3,
+      });
+
+      const libraries = engineering.plcListLibraries();
+      expect(libraries.libraries[0]).toMatchObject({
+        name: "Tc2_Standard",
+        version: "3.3.3.0",
+        namespace: "Tc2_Standard",
+      });
+
+      const library = engineering.plcDescribeLibrary({
+        library: "Tc2_Standard",
+      });
+      expect(library.library.name).toBe("Tc2_Standard");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

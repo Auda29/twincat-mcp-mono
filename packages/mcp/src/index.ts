@@ -100,6 +100,18 @@ const engineeringTreeItemTypeSchema = z.enum([
   "xmlElement",
   "unknown",
 ]);
+const engineeringPlcObjectKindSchema = z.enum([
+  "program",
+  "functionBlock",
+  "function",
+  "gvl",
+  "dut",
+  "interface",
+  "method",
+  "action",
+  "property",
+  "unknown",
+]);
 const listSymbolsInputSchema = z
   .object({
     filter: z.string().trim().min(1).optional(),
@@ -325,6 +337,42 @@ const ioDescribeDeviceInputSchema = z
 const ioDescribeTerminalInputSchema = z
   .object({
     terminal: z.string().trim().min(1, "I/O terminal must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const plcListPousInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    kind: engineeringPlcObjectKindSchema.optional(),
+  })
+  .strict();
+const plcReadPouInputSchema = z
+  .object({
+    pou: z.string().trim().min(1, "PLC object must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const plcSearchCodeInputSchema = z
+  .object({
+    query: z.string().trim().min(1, "PLC code search query must not be empty."),
+    project: z.string().trim().min(1).optional(),
+    kind: engineeringPlcObjectKindSchema.optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "PLC code search limit must be at least 1.")
+      .max(250, "PLC code search limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+const plcListLibrariesInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const plcDescribeLibraryInputSchema = z
+  .object({
+    library: z.string().trim().min(1, "PLC library must not be empty."),
     project: z.string().trim().min(1).optional(),
   })
   .strict();
@@ -918,6 +966,78 @@ export function createMcpToolDefinitions(
           input.project === undefined
             ? { terminal: input.terminal }
             : { terminal: input.terminal, project: input.project },
+        ),
+    },
+    {
+      name: "plc_list_pous",
+      title: "PLC List POUs",
+      description:
+        "List read-only PLC objects such as programs, function blocks, functions, GVLs, DUTs, interfaces, methods, actions, and properties from configured PLC projects.",
+      inputSchema: plcListPousInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof plcListPousInputSchema>) =>
+        runtime.plcListPous(input),
+    },
+    {
+      name: "plc_read_pou",
+      title: "PLC Read POU",
+      description:
+        "Read declaration and implementation text for one configured PLC object.",
+      inputSchema: plcReadPouInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof plcReadPouInputSchema>) =>
+        runtime.plcReadPou(
+          input.project === undefined
+            ? { pou: input.pou }
+            : { pou: input.pou, project: input.project },
+        ),
+    },
+    {
+      name: "plc_search_code",
+      title: "PLC Search Code",
+      description:
+        "Search declaration and implementation text across configured PLC objects with bounded results.",
+      inputSchema: plcSearchCodeInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof plcSearchCodeInputSchema>) =>
+        runtime.plcSearchCode(input),
+    },
+    {
+      name: "plc_describe_pou",
+      title: "PLC Describe POU",
+      description:
+        "Describe one configured PLC object with kind, source path, and declaration/implementation previews.",
+      inputSchema: plcReadPouInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof plcReadPouInputSchema>) =>
+        runtime.plcDescribePou(
+          input.project === undefined
+            ? { pou: input.pou }
+            : { pou: input.pou, project: input.project },
+        ),
+    },
+    {
+      name: "plc_list_libraries",
+      title: "PLC List Libraries",
+      description:
+        "List read-only PLC library references from configured PLC projects.",
+      inputSchema: plcListLibrariesInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof plcListLibrariesInputSchema>) =>
+        runtime.plcListLibraries(input),
+    },
+    {
+      name: "plc_describe_library",
+      title: "PLC Describe Library",
+      description:
+        "Describe one PLC library reference from configured PLC projects.",
+      inputSchema: plcDescribeLibraryInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof plcDescribeLibraryInputSchema>) =>
+        runtime.plcDescribeLibrary(
+          input.project === undefined
+            ? { library: input.library }
+            : { library: input.library, project: input.project },
         ),
     },
     {

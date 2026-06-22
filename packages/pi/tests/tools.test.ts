@@ -619,6 +619,100 @@ function createRuntimeStub() {
       const treeRead = await runtime.tcTreeRead({ path: "EL1008" });
       return { terminal: treeRead.item };
     },
+    plcListPous: async () => ({
+      pous: [
+        {
+          id: "pou:main",
+          name: "MAIN",
+          qualifiedName: "MAIN",
+          kind: "program" as const,
+          path: "/PlcProject/MAIN",
+          sourceFile: "C:/Machine/POUs/MAIN.TcPOU",
+          project: {
+            id: "configuredProjectFiles:c:/machine/plcproject.plcproj",
+            name: "PlcProject",
+            path: "C:/Machine/PlcProject.plcproj",
+            type: "plc" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+        },
+      ],
+      count: 1,
+    }),
+    plcReadPou: async () => ({
+      pou: {
+        id: "pou:main",
+        name: "MAIN",
+        qualifiedName: "MAIN",
+        kind: "program" as const,
+        path: "/PlcProject/MAIN",
+        sourceFile: "C:/Machine/POUs/MAIN.TcPOU",
+        project: {
+          id: "configuredProjectFiles:c:/machine/plcproject.plcproj",
+          name: "PlcProject",
+          path: "C:/Machine/PlcProject.plcproj",
+          type: "plc" as const,
+          exists: true,
+          source: "configuredProjectFiles" as const,
+          workbenchId: "configured-project-files",
+        },
+        declaration: "PROGRAM MAIN",
+        implementation: "fbValve.Open();",
+        rawText: "PROGRAM MAIN\nfbValve.Open();",
+      },
+    }),
+    plcSearchCode: async () => {
+      const runtime = createRuntimeStub();
+      return {
+        matches: [
+          {
+            pou: (await runtime.plcListPous()).pous[0]!,
+            section: "implementation" as const,
+            line: 1,
+            snippet: "fbValve.Open();",
+          },
+        ],
+        count: 1,
+        truncated: false,
+      };
+    },
+    plcDescribePou: async () => {
+      const runtime = createRuntimeStub();
+      return {
+        pou: (await runtime.plcListPous()).pous[0]!,
+        declarationLineCount: 1,
+        implementationLineCount: 1,
+        declarationPreview: "PROGRAM MAIN",
+        implementationPreview: "fbValve.Open();",
+      };
+    },
+    plcListLibraries: async () => ({
+      libraries: [
+        {
+          id: "library:tc2_standard",
+          name: "Tc2_Standard",
+          version: "3.3.3.0",
+          namespace: "Tc2_Standard",
+          sourceFile: "C:/Machine/PlcProject.plcproj",
+          project: {
+            id: "configuredProjectFiles:c:/machine/plcproject.plcproj",
+            name: "PlcProject",
+            path: "C:/Machine/PlcProject.plcproj",
+            type: "plc" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+        },
+      ],
+      count: 1,
+    }),
+    plcDescribeLibrary: async () => {
+      const runtime = createRuntimeStub();
+      return { library: (await runtime.plcListLibraries()).libraries[0]! };
+    },
     readState: async () => ({
       connection: { connected: true },
       adsState: "connected" as const,
@@ -869,6 +963,15 @@ describe("tools", () => {
       (entry) => entry.name === "tc_tree_describe_item",
     );
     const topologyTool = tools.find((entry) => entry.name === "io_list_topology");
+    const listPousTool = tools.find((entry) => entry.name === "plc_list_pous");
+    const readPouTool = tools.find((entry) => entry.name === "plc_read_pou");
+    const searchCodeTool = tools.find((entry) => entry.name === "plc_search_code");
+    const describePouTool = tools.find(
+      (entry) => entry.name === "plc_describe_pou",
+    );
+    const librariesTool = tools.find(
+      (entry) => entry.name === "plc_list_libraries",
+    );
     expect(stateTool).toBeDefined();
     expect(eventsTool).toBeDefined();
     expect(errorsTool).toBeDefined();
@@ -882,6 +985,11 @@ describe("tools", () => {
     expect(treeSearchTool).toBeDefined();
     expect(treeDescribeTool).toBeDefined();
     expect(topologyTool).toBeDefined();
+    expect(listPousTool).toBeDefined();
+    expect(readPouTool).toBeDefined();
+    expect(searchCodeTool).toBeDefined();
+    expect(describePouTool).toBeDefined();
+    expect(librariesTool).toBeDefined();
 
     const state = await stateTool!.execute(
       {},
@@ -993,6 +1101,33 @@ describe("tools", () => {
     expect(topology.ok).toBe(true);
     if (topology.ok) {
       expect(topology.data.devices[0]?.terminalCount).toBe(1);
+    }
+
+    const pous = await listPousTool!.execute(
+      {},
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(pous.ok).toBe(true);
+    if (pous.ok) {
+      expect(pous.data.pous[0]?.kind).toBe("program");
+    }
+
+    const pou = await readPouTool!.execute(
+      { pou: "MAIN" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(pou.ok).toBe(true);
+    if (pou.ok) {
+      expect(pou.data.pou.declaration).toBe("PROGRAM MAIN");
+    }
+
+    const libraries = await librariesTool!.execute(
+      {},
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(libraries.ok).toBe(true);
+    if (libraries.ok) {
+      expect(libraries.data.libraries[0]?.name).toBe("Tc2_Standard");
     }
   });
 

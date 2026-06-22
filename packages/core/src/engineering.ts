@@ -180,6 +180,111 @@ export interface EngineeringIoDescribeTerminalResult {
   readonly terminal: EngineeringTreeItemDescription;
 }
 
+export type EngineeringPlcObjectKind =
+  | "program"
+  | "functionBlock"
+  | "function"
+  | "gvl"
+  | "dut"
+  | "interface"
+  | "method"
+  | "action"
+  | "property"
+  | "unknown";
+
+export interface EngineeringPlcPouSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly qualifiedName: string;
+  readonly kind: EngineeringPlcObjectKind;
+  readonly path: string;
+  readonly sourceFile: string;
+  readonly project: EngineeringProjectSummary;
+}
+
+export interface EngineeringPlcPouContent extends EngineeringPlcPouSummary {
+  readonly declaration: string;
+  readonly implementation: string;
+  readonly rawText: string;
+}
+
+export interface EngineeringPlcListPousInput {
+  readonly project?: string | undefined;
+  readonly kind?: EngineeringPlcObjectKind | undefined;
+}
+
+export interface EngineeringPlcListPousResult {
+  readonly pous: EngineeringPlcPouSummary[];
+  readonly count: number;
+}
+
+export interface EngineeringPlcReadPouInput {
+  readonly pou: string;
+  readonly project?: string | undefined;
+}
+
+export interface EngineeringPlcReadPouResult {
+  readonly pou: EngineeringPlcPouContent;
+}
+
+export interface EngineeringPlcSearchCodeInput {
+  readonly query: string;
+  readonly project?: string | undefined;
+  readonly kind?: EngineeringPlcObjectKind | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface EngineeringPlcCodeSearchMatch {
+  readonly pou: EngineeringPlcPouSummary;
+  readonly section: "declaration" | "implementation" | "raw";
+  readonly line: number;
+  readonly snippet: string;
+}
+
+export interface EngineeringPlcSearchCodeResult {
+  readonly matches: EngineeringPlcCodeSearchMatch[];
+  readonly count: number;
+  readonly truncated: boolean;
+}
+
+export interface EngineeringPlcDescribePouInput
+  extends EngineeringPlcReadPouInput {}
+
+export interface EngineeringPlcDescribePouResult {
+  readonly pou: EngineeringPlcPouSummary;
+  readonly declarationLineCount: number;
+  readonly implementationLineCount: number;
+  readonly declarationPreview: string;
+  readonly implementationPreview: string;
+}
+
+export interface EngineeringPlcLibrarySummary {
+  readonly id: string;
+  readonly name: string;
+  readonly sourceFile: string;
+  readonly project: EngineeringProjectSummary;
+  readonly version?: string | undefined;
+  readonly namespace?: string | undefined;
+}
+
+export interface EngineeringPlcListLibrariesInput {
+  readonly project?: string | undefined;
+}
+
+export interface EngineeringPlcListLibrariesResult {
+  readonly libraries: EngineeringPlcLibrarySummary[];
+  readonly count: number;
+}
+
+export interface EngineeringPlcDescribeLibraryInput {
+  readonly library: string;
+  readonly project?: string | undefined;
+}
+
+export interface EngineeringPlcDescribeLibraryResult {
+  readonly library: EngineeringPlcLibrarySummary;
+}
+
 interface SolutionProjectReference {
   readonly name: string;
   readonly path: string;
@@ -214,6 +319,10 @@ const XML_REFERENCE_EXTENSIONS = new Set([
   ".tcio",
   ".xtp",
 ]);
+const PLC_OBJECT_EXTENSIONS = new Set([".tcpou", ".tcgvl", ".tcdut", ".tcio"]);
+const DEFAULT_CODE_SEARCH_LIMIT = 50;
+const MAX_CODE_SEARCH_LIMIT = 250;
+const CODE_PREVIEW_LINE_COUNT = 12;
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@",
@@ -506,6 +615,437 @@ function collectFileReferences(
   return references;
 }
 
+function isPlcObjectReference(path: string): boolean {
+  return PLC_OBJECT_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+function collectAttributeReferences(
+  value: unknown,
+  basePath: string,
+  predicate: (path: string) => boolean,
+  references = new Set<string>(),
+): Set<string> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectAttributeReferences(entry, basePath, predicate, references);
+    }
+    return references;
+  }
+
+  if (!isRecord(value)) {
+    return references;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (key.startsWith("@") && typeof entryValue === "string") {
+      const path = normalizeProjectPath(entryValue, basePath);
+      if (predicate(entryValue) && existsSync(path)) {
+        references.add(path);
+      }
+      continue;
+    }
+
+    collectAttributeReferences(entryValue, basePath, predicate, references);
+  }
+
+  return references;
+}
+
+function collectPlcObjectReferences(
+  projectXml: unknown,
+  projectPath: string,
+): string[] {
+  return [
+    ...collectAttributeReferences(
+      projectXml,
+      dirname(projectPath),
+      isPlcObjectReference,
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+function collectTextValues(value: unknown, texts: string[] = []): string[] {
+  const scalar = scalarValue(value);
+  if (scalar !== undefined) {
+    const text = settingValueAsString(scalar);
+    if (text.length > 0) {
+      texts.push(text);
+    }
+    return texts;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectTextValues(entry, texts);
+    }
+    return texts;
+  }
+
+  if (isRecord(value)) {
+    for (const [key, entryValue] of Object.entries(value)) {
+      if (key.startsWith("@")) {
+        continue;
+      }
+
+      collectTextValues(entryValue, texts);
+    }
+  }
+
+  return texts;
+}
+
+function findFirstElement(
+  value: unknown,
+  elementNames: readonly string[],
+): Record<string, unknown> | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findFirstElement(entry, elementNames);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (elementNames.includes(key) && isRecord(entryValue)) {
+      return entryValue;
+    }
+
+    if (elementNames.includes(key) && Array.isArray(entryValue)) {
+      const first = entryValue.find(isRecord);
+      if (first !== undefined) {
+        return first;
+      }
+    }
+
+    const found = findFirstElement(entryValue, elementNames);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  return undefined;
+}
+
+function findElementTexts(
+  value: unknown,
+  elementNames: readonly string[],
+  texts: string[] = [],
+): string[] {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      findElementTexts(entry, elementNames, texts);
+    }
+    return texts;
+  }
+
+  if (!isRecord(value)) {
+    return texts;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (elementNames.includes(key)) {
+      texts.push(...collectTextValues(entryValue));
+      continue;
+    }
+
+    if (!key.startsWith("@")) {
+      findElementTexts(entryValue, elementNames, texts);
+    }
+  }
+
+  return texts;
+}
+
+function findSectionTexts(
+  value: unknown,
+  elementNames: readonly string[],
+  excludedObjectNames: readonly string[] = ["Method", "Action", "Property"],
+  texts: string[] = [],
+): string[] {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      findSectionTexts(entry, elementNames, excludedObjectNames, texts);
+    }
+    return texts;
+  }
+
+  if (!isRecord(value)) {
+    return texts;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (excludedObjectNames.includes(key)) {
+      continue;
+    }
+
+    if (elementNames.includes(key)) {
+      texts.push(...collectTextValues(entryValue));
+      continue;
+    }
+
+    if (!key.startsWith("@")) {
+      findSectionTexts(entryValue, elementNames, excludedObjectNames, texts);
+    }
+  }
+
+  return texts;
+}
+
+function firstObjectElementName(parsed: unknown): string | undefined {
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+
+  const root = parsed.TcPlcObject;
+  const source = isRecord(root) ? root : parsed;
+  const preferred = ["POU", "GVL", "DUT", "Itf", "Interface", "Method", "Action", "Property"];
+
+  for (const key of preferred) {
+    if (key in source) {
+      return key;
+    }
+  }
+
+  return Object.keys(source).find((key) => !key.startsWith("@"));
+}
+
+function classifyPlcObject(
+  path: string,
+  objectElementName: string | undefined,
+  objectElement: Record<string, unknown> | undefined,
+  declaration = "",
+): EngineeringPlcObjectKind {
+  const extension = extname(path).toLowerCase();
+  const settings = objectElement === undefined ? {} : collectSettings(objectElement);
+  const objectType = stringSetting(settings, "SpecialFunc", "PouType", "Type");
+  const rootElement = objectElementName?.toLowerCase() ?? "";
+  const haystack = [extension, rootElement, objectType ?? "", declaration, path]
+    .join(" ")
+    .toLowerCase();
+
+  if (rootElement === "method") {
+    return "method";
+  }
+
+  if (rootElement === "action") {
+    return "action";
+  }
+
+  if (rootElement === "property") {
+    return "property";
+  }
+
+  if (/\bfunction_block\b/.test(haystack)) {
+    return "functionBlock";
+  }
+
+  if (/\bprogram\b/.test(haystack)) {
+    return "program";
+  }
+
+  if (/\bfunction\b/.test(haystack)) {
+    return "function";
+  }
+
+  if (extension === ".tcgvl" || rootElement === "gvl") {
+    return "gvl";
+  }
+
+  if (extension === ".tcdut" || rootElement === "dut") {
+    return "dut";
+  }
+
+  if (rootElement === "itf" || rootElement === "interface") {
+    return "interface";
+  }
+
+  return "unknown";
+}
+
+function plcObjectName(
+  path: string,
+  objectElement: Record<string, unknown> | undefined,
+): string {
+  if (objectElement !== undefined) {
+    const settings = collectSettings(objectElement);
+    const name = stringSetting(settings, "Name", "name");
+    if (name !== undefined) {
+      return name;
+    }
+  }
+
+  return projectName(path);
+}
+
+interface PlcObjectElementEntry {
+  readonly elementName: string;
+  readonly element: Record<string, unknown>;
+  readonly ownerName?: string | undefined;
+}
+
+function plcObjectSource(parsed: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+
+  const root = parsed.TcPlcObject;
+  return isRecord(root) ? root : parsed;
+}
+
+function collectEmbeddedPlcObjectElements(
+  value: unknown,
+  ownerName: string,
+  entries: PlcObjectElementEntry[],
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectEmbeddedPlcObjectElements(entry, ownerName, entries);
+    }
+    return;
+  }
+
+  if (!isRecord(value)) {
+    return;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (key.startsWith("@") || key === "#text") {
+      continue;
+    }
+
+    if (["Method", "Action", "Property"].includes(key)) {
+      for (const entry of asArray(entryValue)) {
+        if (isRecord(entry)) {
+          entries.push({
+            elementName: key,
+            element: entry,
+            ownerName,
+          });
+        }
+      }
+      continue;
+    }
+
+    collectEmbeddedPlcObjectElements(entryValue, ownerName, entries);
+  }
+}
+
+function collectPlcObjectElements(parsed: unknown): PlcObjectElementEntry[] {
+  const source = plcObjectSource(parsed);
+  if (source === undefined) {
+    return [];
+  }
+
+  const entries: PlcObjectElementEntry[] = [];
+  const topLevelNames = ["POU", "GVL", "DUT", "Itf", "Interface", "Method", "Action", "Property"];
+
+  for (const elementName of topLevelNames) {
+    const value = source[elementName];
+    if (value === undefined) {
+      continue;
+    }
+
+    for (const element of asArray(value)) {
+      if (!isRecord(element)) {
+        continue;
+      }
+
+      entries.push({ elementName, element });
+
+      if (["POU", "Itf", "Interface"].includes(elementName)) {
+        collectEmbeddedPlcObjectElements(
+          element,
+          plcObjectName("", element),
+          entries,
+        );
+      }
+    }
+  }
+
+  return entries;
+}
+
+function lineCount(text: string): number {
+  if (text.trim().length === 0) {
+    return 0;
+  }
+
+  return text.split(/\r?\n/).length;
+}
+
+function previewText(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .slice(0, CODE_PREVIEW_LINE_COUNT)
+    .join("\n")
+    .trim();
+}
+
+function findLibraryReferences(
+  value: unknown,
+  project: EngineeringProjectSummary,
+  sourceFile: string,
+  libraries = new Map<string, EngineeringPlcLibrarySummary>(),
+): Map<string, EngineeringPlcLibrarySummary> {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      findLibraryReferences(entry, project, sourceFile, libraries);
+    }
+    return libraries;
+  }
+
+  if (!isRecord(value)) {
+    return libraries;
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (!isRecord(entryValue) && !Array.isArray(entryValue)) {
+      continue;
+    }
+
+    for (const entry of asArray(entryValue)) {
+      if (!isRecord(entry)) {
+        continue;
+      }
+
+      const settings = collectSettings(entry);
+      const include = stringSetting(settings, "Include", "Name", "Library", "Placeholder");
+      const normalizedKey = key.toLowerCase();
+
+      if (
+        include !== undefined &&
+        (normalizedKey.includes("library") ||
+          normalizedKey.includes("placeholder") ||
+          normalizedKey === "reference" ||
+          normalizedKey === "placeholderreference")
+      ) {
+        const version = stringSetting(settings, "Version", "DefaultResolution");
+        const namespace = stringSetting(settings, "Namespace", "NamespaceName");
+        const id = `${project.id}:library:${include.toLowerCase()}`;
+        libraries.set(id, {
+          id,
+          name: include,
+          sourceFile,
+          project,
+          ...(version === undefined ? {} : { version }),
+          ...(namespace === undefined ? {} : { namespace }),
+        });
+      }
+
+      findLibraryReferences(entry, project, sourceFile, libraries);
+    }
+  }
+
+  return libraries;
+}
+
 function matchesText(value: string | undefined, query: string | undefined): boolean {
   if (query === undefined || query.trim().length === 0) {
     return true;
@@ -780,6 +1320,117 @@ export class EngineeringService {
     return {
       terminal: this.describeInternalTreeItem(terminal, index),
     };
+  }
+
+  plcListPous(
+    input: EngineeringPlcListPousInput = {},
+  ): EngineeringPlcListPousResult {
+    const pous = this.buildPlcObjects(input.project)
+      .filter((pou) => input.kind === undefined || pou.kind === input.kind)
+      .map((pou) => this.toPlcPouSummary(pou));
+
+    return {
+      pous,
+      count: pous.length,
+    };
+  }
+
+  plcReadPou(input: EngineeringPlcReadPouInput): EngineeringPlcReadPouResult {
+    return {
+      pou: this.findPlcObject(input.pou, input.project),
+    };
+  }
+
+  plcSearchCode(
+    input: EngineeringPlcSearchCodeInput,
+  ): EngineeringPlcSearchCodeResult {
+    const query = input.query.trim().toLowerCase();
+    const limit = Math.min(
+      Math.max(input.limit ?? DEFAULT_CODE_SEARCH_LIMIT, 1),
+      MAX_CODE_SEARCH_LIMIT,
+    );
+    const matches: EngineeringPlcCodeSearchMatch[] = [];
+
+    for (const pou of this.buildPlcObjects(input.project)) {
+      if (input.kind !== undefined && pou.kind !== input.kind) {
+        continue;
+      }
+
+      const sections = [
+        ["declaration", pou.declaration] as const,
+        ["implementation", pou.implementation] as const,
+      ];
+
+      for (const [section, text] of sections) {
+        const lines = text.split(/\r?\n/);
+        for (const [index, line] of lines.entries()) {
+          if (!line.toLowerCase().includes(query)) {
+            continue;
+          }
+
+          matches.push({
+            pou: this.toPlcPouSummary(pou),
+            section,
+            line: index + 1,
+            snippet: line.trim(),
+          });
+
+          if (matches.length > limit) {
+            return {
+              matches: matches.slice(0, limit),
+              count: limit,
+              truncated: true,
+            };
+          }
+        }
+      }
+    }
+
+    return {
+      matches,
+      count: matches.length,
+      truncated: false,
+    };
+  }
+
+  plcDescribePou(
+    input: EngineeringPlcDescribePouInput,
+  ): EngineeringPlcDescribePouResult {
+    const pou = this.findPlcObject(input.pou, input.project);
+    return {
+      pou: this.toPlcPouSummary(pou),
+      declarationLineCount: lineCount(pou.declaration),
+      implementationLineCount: lineCount(pou.implementation),
+      declarationPreview: previewText(pou.declaration),
+      implementationPreview: previewText(pou.implementation),
+    };
+  }
+
+  plcListLibraries(
+    input: EngineeringPlcListLibrariesInput = {},
+  ): EngineeringPlcListLibrariesResult {
+    const libraries = this.buildPlcLibraries(input.project);
+    return {
+      libraries,
+      count: libraries.length,
+    };
+  }
+
+  plcDescribeLibrary(
+    input: EngineeringPlcDescribeLibraryInput,
+  ): EngineeringPlcDescribeLibraryResult {
+    const normalizedLibrary = input.library.trim().toLowerCase();
+    const library = this.buildPlcLibraries(input.project).find(
+      (entry) =>
+        entry.id.toLowerCase() === normalizedLibrary ||
+        entry.name.toLowerCase() === normalizedLibrary,
+    );
+
+    if (library === undefined) {
+      throw new Error(`PLC library "${input.library}" was not found.`);
+    }
+
+    return { library };
   }
 
   private discoverProjects(): EngineeringProjectSummary[] {
@@ -1078,5 +1729,135 @@ export class EngineeringService {
       boxCount: boxes.length,
       terminalCount: terminals.length,
     };
+  }
+
+  private buildPlcObjects(projectFilter?: string): EngineeringPlcPouContent[] {
+    const projects = this.filterProjects(projectFilter, "plc");
+    const objects: EngineeringPlcPouContent[] = [];
+
+    for (const project of projects) {
+      if (!project.exists) {
+        continue;
+      }
+
+      const parsedProject = xmlParser.parse(readFileSync(project.path, "utf8"));
+      for (const objectPath of collectPlcObjectReferences(
+        parsedProject,
+        project.path,
+      )) {
+        objects.push(...this.readPlcObjects(objectPath, project));
+      }
+    }
+
+    return objects.sort((left, right) =>
+      left.qualifiedName.localeCompare(right.qualifiedName),
+    );
+  }
+
+  private readPlcObjects(
+    sourceFile: string,
+    project: EngineeringProjectSummary,
+  ): EngineeringPlcPouContent[] {
+    if (!existsSync(sourceFile)) {
+      return [];
+    }
+
+    const rawXml = readFileSync(sourceFile, "utf8");
+    const parsed = xmlParser.parse(rawXml) as unknown;
+    return collectPlcObjectElements(parsed).map((entry, index) => {
+      const name = plcObjectName(sourceFile, entry.element);
+      const qualifiedName =
+        entry.ownerName === undefined || entry.ownerName.length === 0
+          ? name
+          : `${entry.ownerName}.${name}`;
+      const declaration = findSectionTexts(entry.element, ["Declaration"])
+        .join("\n")
+        .trim();
+      const implementation = findSectionTexts(entry.element, [
+        "Implementation",
+        "ST",
+        "FBD",
+        "LD",
+        "SFC",
+        "CFC",
+      ])
+        .join("\n")
+        .trim();
+      const rawText = [declaration, implementation]
+        .filter((text) => text.length > 0)
+        .join("\n\n");
+      const kind = classifyPlcObject(
+        sourceFile,
+        entry.elementName,
+        entry.element,
+        declaration,
+      );
+
+      return {
+        id: `${project.id}:pou:${sourceFile.toLowerCase()}:${qualifiedName.toLowerCase()}:${index}`,
+        name,
+        qualifiedName,
+        kind,
+        path: `/${project.name}/${qualifiedName}`,
+        sourceFile,
+        project,
+        declaration,
+        implementation,
+        rawText,
+      };
+    });
+  }
+
+  private findPlcObject(
+    pou: string,
+    projectFilter?: string,
+  ): EngineeringPlcPouContent {
+    const normalizedPou = pou.trim().toLowerCase();
+    const object = this.buildPlcObjects(projectFilter).find(
+      (entry) =>
+        entry.id.toLowerCase() === normalizedPou ||
+        entry.name.toLowerCase() === normalizedPou ||
+        entry.qualifiedName.toLowerCase() === normalizedPou ||
+        entry.sourceFile.toLowerCase() === normalizedPou,
+    );
+
+    if (object === undefined) {
+      throw new Error(`PLC object "${pou}" was not found.`);
+    }
+
+    return object;
+  }
+
+  private toPlcPouSummary(
+    pou: EngineeringPlcPouContent,
+  ): EngineeringPlcPouSummary {
+    return {
+      id: pou.id,
+      name: pou.name,
+      qualifiedName: pou.qualifiedName,
+      kind: pou.kind,
+      path: pou.path,
+      sourceFile: pou.sourceFile,
+      project: pou.project,
+    };
+  }
+
+  private buildPlcLibraries(
+    projectFilter?: string,
+  ): EngineeringPlcLibrarySummary[] {
+    const libraries = new Map<string, EngineeringPlcLibrarySummary>();
+
+    for (const project of this.filterProjects(projectFilter, "plc")) {
+      if (!project.exists) {
+        continue;
+      }
+
+      const parsedProject = xmlParser.parse(readFileSync(project.path, "utf8"));
+      findLibraryReferences(parsedProject, project, project.path, libraries);
+    }
+
+    return [...libraries.values()].sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
   }
 }

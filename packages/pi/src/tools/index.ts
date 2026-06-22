@@ -9,6 +9,13 @@ import {
   type EngineeringIoListTopologyResult,
   type EngineeringProjectStateResult,
   type EngineeringProjectTypeConfig,
+  type EngineeringPlcDescribeLibraryResult,
+  type EngineeringPlcDescribePouResult,
+  type EngineeringPlcListLibrariesResult,
+  type EngineeringPlcListPousResult,
+  type EngineeringPlcObjectKind,
+  type EngineeringPlcReadPouResult,
+  type EngineeringPlcSearchCodeResult,
   type EngineeringTreeDescribeItemResult,
   type EngineeringTreeItemType,
   type EngineeringTreeReadResult,
@@ -143,6 +150,19 @@ const engineeringTreeItemTypeSchema = z.enum([
   "terminal",
   "task",
   "xmlElement",
+  "unknown",
+]);
+
+const engineeringPlcObjectKindSchema = z.enum([
+  "program",
+  "functionBlock",
+  "function",
+  "gvl",
+  "dut",
+  "interface",
+  "method",
+  "action",
+  "property",
   "unknown",
 ]);
 
@@ -322,6 +342,47 @@ const ioDescribeDeviceInputSchema = z
 const ioDescribeTerminalInputSchema = z
   .object({
     terminal: z.string().trim().min(1, "I/O terminal must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const plcListPousInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    kind: engineeringPlcObjectKindSchema.optional(),
+  })
+  .strict();
+
+const plcReadPouInputSchema = z
+  .object({
+    pou: z.string().trim().min(1, "PLC object must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const plcSearchCodeInputSchema = z
+  .object({
+    query: z.string().trim().min(1, "PLC code search query must not be empty."),
+    project: z.string().trim().min(1).optional(),
+    kind: engineeringPlcObjectKindSchema.optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "PLC code search limit must be at least 1.")
+      .max(250, "PLC code search limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+
+const plcListLibrariesInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const plcDescribeLibraryInputSchema = z
+  .object({
+    library: z.string().trim().min(1, "PLC library must not be empty."),
     project: z.string().trim().min(1).optional(),
   })
   .strict();
@@ -539,6 +600,16 @@ export interface IoDescribeDeviceToolOutput
   extends EngineeringIoDescribeDeviceResult {}
 export interface IoDescribeTerminalToolOutput
   extends EngineeringIoDescribeTerminalResult {}
+export interface PlcListPousToolOutput extends EngineeringPlcListPousResult {}
+export interface PlcReadPouToolOutput extends EngineeringPlcReadPouResult {}
+export interface PlcSearchCodeToolOutput
+  extends EngineeringPlcSearchCodeResult {}
+export interface PlcDescribePouToolOutput
+  extends EngineeringPlcDescribePouResult {}
+export interface PlcListLibrariesToolOutput
+  extends EngineeringPlcListLibrariesResult {}
+export interface PlcDescribeLibraryToolOutput
+  extends EngineeringPlcDescribeLibraryResult {}
 export interface PlcWriteToolOutput {
   readonly result: {
     readonly name: string;
@@ -709,6 +780,24 @@ export function createToolDefinitions(): Array<
   | ToolDefinition<
       z.infer<typeof ioDescribeTerminalInputSchema>,
       IoDescribeTerminalToolOutput
+    >
+  | ToolDefinition<z.infer<typeof plcListPousInputSchema>, PlcListPousToolOutput>
+  | ToolDefinition<z.infer<typeof plcReadPouInputSchema>, PlcReadPouToolOutput>
+  | ToolDefinition<
+      z.infer<typeof plcSearchCodeInputSchema>,
+      PlcSearchCodeToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof plcReadPouInputSchema>,
+      PlcDescribePouToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof plcListLibrariesInputSchema>,
+      PlcListLibrariesToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof plcDescribeLibraryInputSchema>,
+      PlcDescribeLibraryToolOutput
     >
   | ToolDefinition<z.infer<typeof stateInputSchema>, PlcStateToolOutput>
   | ToolDefinition<z.infer<typeof writeInputSchema>, PlcWriteToolOutput>
@@ -1066,6 +1155,102 @@ export function createToolDefinitions(): Array<
         ),
     }),
     createToolDefinition({
+      name: "plc_list_pous",
+      description:
+        "List read-only PLC objects such as programs, function blocks, functions, GVLs, DUTs, interfaces, methods, actions, and properties from configured PLC projects.",
+      inputSchema: plcListPousInputSchema,
+      handler: async (input, context) => {
+        const listInput: {
+          project?: string;
+          kind?: EngineeringPlcObjectKind;
+        } = {};
+
+        if (input.project !== undefined) {
+          listInput.project = input.project;
+        }
+
+        if (input.kind !== undefined) {
+          listInput.kind = input.kind;
+        }
+
+        return context.runtime.plcListPous(listInput);
+      },
+    }),
+    createToolDefinition({
+      name: "plc_read_pou",
+      description:
+        "Read declaration and implementation text for one configured PLC object.",
+      inputSchema: plcReadPouInputSchema,
+      handler: async (input, context) =>
+        context.runtime.plcReadPou(
+          input.project === undefined
+            ? { pou: input.pou }
+            : { pou: input.pou, project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "plc_search_code",
+      description:
+        "Search declaration and implementation text across configured PLC objects with bounded results.",
+      inputSchema: plcSearchCodeInputSchema,
+      handler: async (input, context) => {
+        const searchInput: {
+          query: string;
+          project?: string;
+          kind?: EngineeringPlcObjectKind;
+          limit?: number;
+        } = { query: input.query };
+
+        if (input.project !== undefined) {
+          searchInput.project = input.project;
+        }
+
+        if (input.kind !== undefined) {
+          searchInput.kind = input.kind;
+        }
+
+        if (input.limit !== undefined) {
+          searchInput.limit = input.limit;
+        }
+
+        return context.runtime.plcSearchCode(searchInput);
+      },
+    }),
+    createToolDefinition({
+      name: "plc_describe_pou",
+      description:
+        "Describe one configured PLC object with kind, source path, and declaration/implementation previews.",
+      inputSchema: plcReadPouInputSchema,
+      handler: async (input, context) =>
+        context.runtime.plcDescribePou(
+          input.project === undefined
+            ? { pou: input.pou }
+            : { pou: input.pou, project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "plc_list_libraries",
+      description:
+        "List read-only PLC library references from configured PLC projects.",
+      inputSchema: plcListLibrariesInputSchema,
+      handler: async (input, context) =>
+        context.runtime.plcListLibraries(
+          input.project === undefined ? {} : { project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "plc_describe_library",
+      description:
+        "Describe one PLC library reference from configured PLC projects.",
+      inputSchema: plcDescribeLibraryInputSchema,
+      handler: async (input, context) =>
+        context.runtime.plcDescribeLibrary(
+          input.project === undefined
+            ? { library: input.library }
+            : { library: input.library, project: input.project },
+        ),
+    }),
+    createToolDefinition({
       name: "plc_watch",
       description:
         "Register or reuse a PLC notification watch for a symbol.",
@@ -1211,6 +1396,11 @@ export {
   ioListTopologyInputSchema,
   ioDescribeDeviceInputSchema,
   ioDescribeTerminalInputSchema,
+  plcListPousInputSchema,
+  plcReadPouInputSchema,
+  plcSearchCodeInputSchema,
+  plcListLibrariesInputSchema,
+  plcDescribeLibraryInputSchema,
   stateInputSchema,
   writeInputSchema,
   setWriteModeInputSchema,

@@ -596,6 +596,93 @@ function createRuntimeStub(
       const treeRead = await runtime.tcTreeRead({ path: "EL1008" });
       return { terminal: treeRead.item };
     },
+    plcListPous: async () => ({
+      pous: [
+        {
+          id: "pou:main",
+          name: "MAIN",
+          qualifiedName: "MAIN",
+          kind: "program" as const,
+          path: "/PlcProject/MAIN",
+          sourceFile: "C:/Machine/POUs/MAIN.TcPOU",
+          project: {
+            id: "configuredProjectFiles:c:/machine/plcproject.plcproj",
+            name: "PlcProject",
+            path: "C:/Machine/PlcProject.plcproj",
+            type: "plc" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+        },
+      ],
+      count: 1,
+    }),
+    plcReadPou: async () => ({
+      pou: {
+        id: "pou:main",
+        name: "MAIN",
+        qualifiedName: "MAIN",
+        kind: "program" as const,
+        path: "/PlcProject/MAIN",
+        sourceFile: "C:/Machine/POUs/MAIN.TcPOU",
+        project: {
+          id: "configuredProjectFiles:c:/machine/plcproject.plcproj",
+          name: "PlcProject",
+          path: "C:/Machine/PlcProject.plcproj",
+          type: "plc" as const,
+          exists: true,
+          source: "configuredProjectFiles" as const,
+          workbenchId: "configured-project-files",
+        },
+        declaration: "PROGRAM MAIN",
+        implementation: "fbValve.Open();",
+        rawText: "PROGRAM MAIN\nfbValve.Open();",
+      },
+    }),
+    plcSearchCode: async () => ({
+      matches: [
+        {
+          pou: (await runtime.plcListPous()).pous[0]!,
+          section: "implementation" as const,
+          line: 1,
+          snippet: "fbValve.Open();",
+        },
+      ],
+      count: 1,
+      truncated: false,
+    }),
+    plcDescribePou: async () => ({
+      pou: (await runtime.plcListPous()).pous[0]!,
+      declarationLineCount: 1,
+      implementationLineCount: 1,
+      declarationPreview: "PROGRAM MAIN",
+      implementationPreview: "fbValve.Open();",
+    }),
+    plcListLibraries: async () => ({
+      libraries: [
+        {
+          id: "library:tc2_standard",
+          name: "Tc2_Standard",
+          version: "3.3.3.0",
+          namespace: "Tc2_Standard",
+          sourceFile: "C:/Machine/PlcProject.plcproj",
+          project: {
+            id: "configuredProjectFiles:c:/machine/plcproject.plcproj",
+            name: "PlcProject",
+            path: "C:/Machine/PlcProject.plcproj",
+            type: "plc" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+        },
+      ],
+      count: 1,
+    }),
+    plcDescribeLibrary: async () => ({
+      library: (await runtime.plcListLibraries()).libraries[0]!,
+    }),
     writeSymbol: async ({ name, value }: { name: string; value: unknown }) => ({
       name,
       value,
@@ -733,6 +820,12 @@ describe("mcp tool definitions", () => {
       "io_list_topology",
       "io_describe_device",
       "io_describe_terminal",
+      "plc_list_pous",
+      "plc_read_pou",
+      "plc_search_code",
+      "plc_describe_pou",
+      "plc_list_libraries",
+      "plc_describe_library",
       "plc_write",
       "plc_watch",
       "plc_wait_until",
@@ -985,6 +1078,26 @@ describe("mcp tool definitions", () => {
     expect(topology.isError).toBeUndefined();
     expect(topology.structuredContent).toMatchObject({
       devices: [{ name: "Device 1", terminalCount: 1 }],
+      count: 1,
+    });
+
+    const pous = await callMcpTool(tools, "plc_list_pous", {});
+    expect(pous.isError).toBeUndefined();
+    expect(pous.structuredContent).toMatchObject({
+      pous: [{ name: "MAIN", kind: "program" }],
+      count: 1,
+    });
+
+    const pou = await callMcpTool(tools, "plc_read_pou", { pou: "MAIN" });
+    expect(pou.isError).toBeUndefined();
+    expect(pou.structuredContent).toMatchObject({
+      pou: { declaration: "PROGRAM MAIN" },
+    });
+
+    const libraries = await callMcpTool(tools, "plc_list_libraries", {});
+    expect(libraries.isError).toBeUndefined();
+    expect(libraries.structuredContent).toMatchObject({
+      libraries: [{ name: "Tc2_Standard" }],
       count: 1,
     });
   });

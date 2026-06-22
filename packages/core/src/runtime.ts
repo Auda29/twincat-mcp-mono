@@ -48,6 +48,14 @@ import {
   type EngineeringIoDescribeTerminalResult,
   type EngineeringIoListTopologyResult,
   type EngineeringProjectStateResult,
+  type EngineeringPlcDescribeLibraryResult,
+  type EngineeringPlcDescribePouResult,
+  type EngineeringPlcLibrarySummary,
+  type EngineeringPlcListLibrariesResult,
+  type EngineeringPlcListPousResult,
+  type EngineeringPlcObjectKind,
+  type EngineeringPlcReadPouResult,
+  type EngineeringPlcSearchCodeResult,
   type EngineeringTreeDescribeItemResult,
   type EngineeringTreeItemType,
   type EngineeringTreeReadResult,
@@ -140,6 +148,34 @@ export interface IoDescribeTerminalInput {
   readonly project?: string | undefined;
 }
 
+export interface PlcListPousInput {
+  readonly project?: string | undefined;
+  readonly kind?: EngineeringPlcObjectKind | undefined;
+}
+
+export interface PlcReadPouInput {
+  readonly pou: string;
+  readonly project?: string | undefined;
+}
+
+export interface PlcSearchCodeInput {
+  readonly query: string;
+  readonly project?: string | undefined;
+  readonly kind?: EngineeringPlcObjectKind | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface PlcDescribePouInput extends PlcReadPouInput {}
+
+export interface PlcListLibrariesInput {
+  readonly project?: string | undefined;
+}
+
+export interface PlcDescribeLibraryInput {
+  readonly library: string;
+  readonly project?: string | undefined;
+}
+
 export interface WriteSymbolInput<T = unknown> {
   readonly name: string;
   readonly value: T;
@@ -211,6 +247,16 @@ export interface TwinCatAdsOperations {
   ioDescribeTerminal(
     input: IoDescribeTerminalInput,
   ): EngineeringIoDescribeTerminalResult;
+  plcListPous(input?: PlcListPousInput): EngineeringPlcListPousResult;
+  plcReadPou(input: PlcReadPouInput): EngineeringPlcReadPouResult;
+  plcSearchCode(input: PlcSearchCodeInput): EngineeringPlcSearchCodeResult;
+  plcDescribePou(input: PlcDescribePouInput): EngineeringPlcDescribePouResult;
+  plcListLibraries(
+    input?: PlcListLibrariesInput,
+  ): EngineeringPlcListLibrariesResult;
+  plcDescribeLibrary(
+    input: PlcDescribeLibraryInput,
+  ): EngineeringPlcDescribeLibraryResult;
   writeSymbol<T = unknown>(
     input: WriteSymbolInput<T>,
   ): Promise<PlcWriteResult<T>>;
@@ -286,6 +332,12 @@ export function createTwinCatAdsRuntime(
     ioListTopology: (input = {}) => engineering.ioListTopology(input),
     ioDescribeDevice: (input) => engineering.ioDescribeDevice(input),
     ioDescribeTerminal: (input) => engineering.ioDescribeTerminal(input),
+    plcListPous: (input = {}) => engineering.plcListPous(input),
+    plcReadPou: (input) => engineering.plcReadPou(input),
+    plcSearchCode: (input) => engineering.plcSearchCode(input),
+    plcDescribePou: (input) => engineering.plcDescribePou(input),
+    plcListLibraries: (input = {}) => engineering.plcListLibraries(input),
+    plcDescribeLibrary: (input) => engineering.plcDescribeLibrary(input),
     writeSymbol: async (input) => service.writeSymbol(input.name, input.value),
     waitUntil: async (input) => service.waitUntil(input),
     watchSymbol: async (input) => {

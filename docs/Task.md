@@ -62,15 +62,15 @@ Fehlerbilder andere sind.
 - `io_describe_device` und `io_describe_terminal` fuer Geraete/Klemmen pruefen. `[Done]`
 - Schreibende Tree-Operationen wie Create/Rename/Delete nur als spaetere, separat gegatete Phase vormerken. `[Done: weiterhin out of scope]`
 
-### 22. PLC-Code-, POU- und Library-Kontext read-only einfuehren `[Open]`
+### 22. PLC-Code-, POU- und Library-Kontext read-only einfuehren `[Done]`
 
-- Classic PLC und PLC++/dateibasierte Projekte getrennt modellieren.
-- `plc_list_pous` implementieren, um Programme, FBs, Funktionen, GVLs, Interfaces und Methoden sichtbar zu machen.
-- `plc_read_pou` implementieren, um Interface und Implementation eines POU gezielt zu lesen.
-- `plc_search_code` implementieren, um Code und Deklarationen mit Limits zu durchsuchen.
-- `plc_describe_pou` implementieren, um Art, Pfad/FQN, Deklarationen, Aufrufpunkte und Quellort zusammenzufassen.
-- `plc_list_libraries` und `plc_describe_library` pruefen, um installierte/referenzierte PLC-Bibliotheken sichtbar zu machen.
-- Schreibende Code-Tools wie `plc_update_pou`, `plc_create_pou`, `plc_delete_pou` erst nach stabilem Read-only-Design planen.
+- Classic PLC und PLC++/dateibasierte Projekte getrennt modellieren. `[Done: file-backed Classic/TcPlcObject prototype; PLC++ bleibt spaeteres Backend-Thema]`
+- `plc_list_pous` implementieren, um Programme, FBs, Funktionen, GVLs, Interfaces und Methoden sichtbar zu machen. `[Done]`
+- `plc_read_pou` implementieren, um Interface und Implementation eines POU gezielt zu lesen. `[Done]`
+- `plc_search_code` implementieren, um Code und Deklarationen mit Limits zu durchsuchen. `[Done]`
+- `plc_describe_pou` implementieren, um Art, Pfad/FQN, Deklarationen, Aufrufpunkte und Quellort zusammenzufassen. `[Done: kompakte Previews und Quellort]`
+- `plc_list_libraries` und `plc_describe_library` pruefen, um installierte/referenzierte PLC-Bibliotheken sichtbar zu machen. `[Done]`
+- Schreibende Code-Tools wie `plc_update_pou`, `plc_create_pou`, `plc_delete_pou` erst nach stabilem Read-only-Design planen. `[Done: weiterhin out of scope]`
 
 ### 23. Engineering-Build und Fehlerkontext ergaenzen `[Open]`
 
