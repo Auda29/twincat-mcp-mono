@@ -52,15 +52,15 @@ Fehlerbilder andere sind.
 - `tc_project_state` definieren, um Projektdatei, Projekttyp, aktive Verbindung und Backend-Quelle kompakt auszugeben. `[Done]`
 - Backend-Faehigkeiten explizit melden, z. B. `runtimeOnly`, `engineeringRead`, `engineeringWrite`. `[Done]`
 
-### 21. SysManager-Tree und I/O-Topologie als Engineering-Kontext lesen `[Open]`
+### 21. SysManager-Tree und I/O-Topologie als Engineering-Kontext lesen `[Done]`
 
-- Read-only-Zugriff auf den SysManager-Baum evaluieren.
-- `tc_tree_read` implementieren, um einen konfigurierten oder angegebenen Tree-Pfad gezielt zu lesen.
-- `tc_tree_search` implementieren, um TreeItems nach Name, Typ oder Kommentar zu finden.
-- `tc_tree_describe_item` implementieren, um Typ, Pfad, Kommentar, Settings und Kinder kompakt zu beschreiben.
-- `io_list_topology` als Engineering-Ergaenzung zu den ADS-IO-Reads aus Phase 2 entwerfen.
-- `io_describe_device` und `io_describe_terminal` fuer Geraete/Klemmen pruefen.
-- Schreibende Tree-Operationen wie Create/Rename/Delete nur als spaetere, separat gegatete Phase vormerken.
+- Read-only-Zugriff auf den SysManager-Baum evaluieren. `[Done: docs/sysmanager-tree-topology.md]`
+- `tc_tree_read` implementieren, um einen konfigurierten oder angegebenen Tree-Pfad gezielt zu lesen. `[Done]`
+- `tc_tree_search` implementieren, um TreeItems nach Name, Typ oder Kommentar zu finden. `[Done]`
+- `tc_tree_describe_item` implementieren, um Typ, Pfad, Kommentar, Settings und Kinder kompakt zu beschreiben. `[Done]`
+- `io_list_topology` als Engineering-Ergaenzung zu den ADS-IO-Reads aus Phase 2 entwerfen. `[Done]`
+- `io_describe_device` und `io_describe_terminal` fuer Geraete/Klemmen pruefen. `[Done]`
+- Schreibende Tree-Operationen wie Create/Rename/Delete nur als spaetere, separat gegatete Phase vormerken. `[Done: weiterhin out of scope]`
 
 ### 22. PLC-Code-, POU- und Library-Kontext read-only einfuehren `[Open]`
 

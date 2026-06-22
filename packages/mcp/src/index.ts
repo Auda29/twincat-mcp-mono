@@ -89,6 +89,17 @@ const engineeringProjectTypeSchema = z.enum([
   "hmi",
   "unknown",
 ]);
+const engineeringTreeItemTypeSchema = z.enum([
+  "project",
+  "systemManager",
+  "io",
+  "device",
+  "box",
+  "terminal",
+  "task",
+  "xmlElement",
+  "unknown",
+]);
 const listSymbolsInputSchema = z
   .object({
     filter: z.string().trim().min(1).optional(),
@@ -276,6 +287,44 @@ const tcListProjectsInputSchema = z
   .strict();
 const tcProjectStateInputSchema = z
   .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const tcTreeReadInputSchema = z
+  .object({
+    path: z.string().trim().min(1, "TwinCAT tree path must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const tcTreeSearchInputSchema = z
+  .object({
+    query: z.string().trim().min(1).optional(),
+    name: z.string().trim().min(1).optional(),
+    type: engineeringTreeItemTypeSchema.optional(),
+    comment: z.string().trim().min(1).optional(),
+    project: z.string().trim().min(1).optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "Tree search limit must be at least 1.")
+      .max(250, "Tree search limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+const ioListTopologyInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const ioDescribeDeviceInputSchema = z
+  .object({
+    device: z.string().trim().min(1, "I/O device must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const ioDescribeTerminalInputSchema = z
+  .object({
+    terminal: z.string().trim().min(1, "I/O terminal must not be empty."),
     project: z.string().trim().min(1).optional(),
   })
   .strict();
@@ -793,6 +842,82 @@ export function createMcpToolDefinitions(
       execute: async (input: z.infer<typeof tcProjectStateInputSchema>) =>
         runtime.tcProjectState(
           input.project === undefined ? {} : { project: input.project },
+        ),
+    },
+    {
+      name: "tc_tree_read",
+      title: "TwinCAT Tree Read",
+      description:
+        "Read one TwinCAT/System Manager tree item from configured project files.",
+      inputSchema: tcTreeReadInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcTreeReadInputSchema>) =>
+        runtime.tcTreeRead(
+          input.project === undefined
+            ? { path: input.path }
+            : { path: input.path, project: input.project },
+        ),
+    },
+    {
+      name: "tc_tree_search",
+      title: "TwinCAT Tree Search",
+      description:
+        "Search TwinCAT/System Manager tree items by text, name, type, comment, or project.",
+      inputSchema: tcTreeSearchInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcTreeSearchInputSchema>) =>
+        runtime.tcTreeSearch(input),
+    },
+    {
+      name: "tc_tree_describe_item",
+      title: "TwinCAT Tree Describe Item",
+      description:
+        "Describe a TwinCAT/System Manager tree item with settings and children.",
+      inputSchema: tcTreeReadInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcTreeReadInputSchema>) =>
+        runtime.tcTreeDescribeItem(
+          input.project === undefined
+            ? { path: input.path }
+            : { path: input.path, project: input.project },
+        ),
+    },
+    {
+      name: "io_list_topology",
+      title: "I/O List Topology",
+      description:
+        "List read-only I/O topology from configured TwinCAT engineering project files.",
+      inputSchema: ioListTopologyInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof ioListTopologyInputSchema>) =>
+        runtime.ioListTopology(input),
+    },
+    {
+      name: "io_describe_device",
+      title: "I/O Describe Device",
+      description:
+        "Describe one read-only I/O device and its boxes and terminals from engineering project files.",
+      inputSchema: ioDescribeDeviceInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof ioDescribeDeviceInputSchema>) =>
+        runtime.ioDescribeDevice(
+          input.project === undefined
+            ? { device: input.device }
+            : { device: input.device, project: input.project },
+        ),
+    },
+    {
+      name: "io_describe_terminal",
+      title: "I/O Describe Terminal",
+      description:
+        "Describe one read-only I/O terminal from configured TwinCAT engineering project files.",
+      inputSchema: ioDescribeTerminalInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof ioDescribeTerminalInputSchema>) =>
+        runtime.ioDescribeTerminal(
+          input.project === undefined
+            ? { terminal: input.terminal }
+            : { terminal: input.terminal, project: input.project },
         ),
     },
     {

@@ -491,6 +491,111 @@ function createRuntimeStub(
       ],
       count: 1,
     }),
+    tcTreeRead: async () => ({
+      item: {
+        id: "tree:terminal",
+        path: "/Machine/Machine.xti/TcSmProject:Machine/IoTree:I/O/Device:Device 1/Terminal:EL1008",
+        name: "EL1008",
+        type: "terminal" as const,
+        xmlElement: "Terminal",
+        sourceFile: "C:/Machine/Machine.xti",
+        project: {
+          id: "configuredProjectFiles:c:/machine/machine.tsproj",
+          name: "Machine",
+          path: "C:/Machine/Machine.tsproj",
+          type: "sysManager" as const,
+          exists: true,
+          source: "configuredProjectFiles" as const,
+          workbenchId: "configured-project-files",
+        },
+        comment: "Digital inputs",
+        childCount: 0,
+        settings: { Name: "EL1008", Type: "Terminal" },
+        children: [],
+      },
+    }),
+    tcTreeSearch: async () => ({
+      items: [
+        {
+          id: "tree:terminal",
+          path: "/Machine/Machine.xti/TcSmProject:Machine/IoTree:I/O/Device:Device 1/Terminal:EL1008",
+          name: "EL1008",
+          type: "terminal" as const,
+          xmlElement: "Terminal",
+          sourceFile: "C:/Machine/Machine.xti",
+          project: {
+            id: "configuredProjectFiles:c:/machine/machine.tsproj",
+            name: "Machine",
+            path: "C:/Machine/Machine.tsproj",
+            type: "sysManager" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+          comment: "Digital inputs",
+          childCount: 0,
+        },
+      ],
+      count: 1,
+      truncated: false,
+    }),
+    tcTreeDescribeItem: async () => ({
+      item: {
+        id: "tree:device",
+        path: "/Machine/Machine.xti/TcSmProject:Machine/IoTree:I/O/Device:Device 1",
+        name: "Device 1",
+        type: "device" as const,
+        xmlElement: "Device",
+        sourceFile: "C:/Machine/Machine.xti",
+        project: {
+          id: "configuredProjectFiles:c:/machine/machine.tsproj",
+          name: "Machine",
+          path: "C:/Machine/Machine.tsproj",
+          type: "sysManager" as const,
+          exists: true,
+          source: "configuredProjectFiles" as const,
+          workbenchId: "configured-project-files",
+        },
+        childCount: 1,
+        settings: { Name: "Device 1", Type: "EtherCAT Master" },
+        children: [],
+      },
+    }),
+    ioListTopology: async () => ({
+      devices: [
+        {
+          id: "tree:device",
+          path: "/Machine/Machine.xti/TcSmProject:Machine/IoTree:I/O/Device:Device 1",
+          name: "Device 1",
+          type: "device" as const,
+          xmlElement: "Device",
+          sourceFile: "C:/Machine/Machine.xti",
+          project: {
+            id: "configuredProjectFiles:c:/machine/machine.tsproj",
+            name: "Machine",
+            path: "C:/Machine/Machine.tsproj",
+            type: "sysManager" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+          childCount: 1,
+          boxes: [],
+          terminals: [],
+          boxCount: 0,
+          terminalCount: 1,
+        },
+      ],
+      count: 1,
+    }),
+    ioDescribeDevice: async () => {
+      const topology = await runtime.ioListTopology();
+      return { device: topology.devices[0]! };
+    },
+    ioDescribeTerminal: async () => {
+      const treeRead = await runtime.tcTreeRead({ path: "EL1008" });
+      return { terminal: treeRead.item };
+    },
     writeSymbol: async ({ name, value }: { name: string; value: unknown }) => ({
       name,
       value,
@@ -622,6 +727,12 @@ describe("mcp tool definitions", () => {
       "tc_list_workbenches",
       "tc_list_projects",
       "tc_project_state",
+      "tc_tree_read",
+      "tc_tree_search",
+      "tc_tree_describe_item",
+      "io_list_topology",
+      "io_describe_device",
+      "io_describe_terminal",
       "plc_write",
       "plc_watch",
       "plc_wait_until",
@@ -851,6 +962,30 @@ describe("mcp tool definitions", () => {
           activeConnection: { available: false },
         },
       ],
+    });
+
+    const treeSearch = await callMcpTool(tools, "tc_tree_search", {
+      type: "terminal",
+    });
+    expect(treeSearch.isError).toBeUndefined();
+    expect(treeSearch.structuredContent).toMatchObject({
+      items: [{ name: "EL1008", type: "terminal" }],
+      count: 1,
+    });
+
+    const treeRead = await callMcpTool(tools, "tc_tree_read", {
+      path: "EL1008",
+    });
+    expect(treeRead.isError).toBeUndefined();
+    expect(treeRead.structuredContent).toMatchObject({
+      item: { name: "EL1008", settings: { Type: "Terminal" } },
+    });
+
+    const topology = await callMcpTool(tools, "io_list_topology", {});
+    expect(topology.isError).toBeUndefined();
+    expect(topology.structuredContent).toMatchObject({
+      devices: [{ name: "Device 1", terminalCount: 1 }],
+      count: 1,
     });
   });
 });

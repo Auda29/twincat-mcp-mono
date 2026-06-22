@@ -4,8 +4,15 @@ import {
   WriteDeniedError,
   type EngineeringListProjectsResult,
   type EngineeringListWorkbenchesResult,
+  type EngineeringIoDescribeDeviceResult,
+  type EngineeringIoDescribeTerminalResult,
+  type EngineeringIoListTopologyResult,
   type EngineeringProjectStateResult,
   type EngineeringProjectTypeConfig,
+  type EngineeringTreeDescribeItemResult,
+  type EngineeringTreeItemType,
+  type EngineeringTreeReadResult,
+  type EngineeringTreeSearchResult,
   type IoListGroupsResult,
   type IoReadGroupResult,
   type IoReadManyResult,
@@ -124,6 +131,18 @@ const engineeringProjectTypeSchema = z.enum([
   "sysManager",
   "plc",
   "hmi",
+  "unknown",
+]);
+
+const engineeringTreeItemTypeSchema = z.enum([
+  "project",
+  "systemManager",
+  "io",
+  "device",
+  "box",
+  "terminal",
+  "task",
+  "xmlElement",
   "unknown",
 ]);
 
@@ -260,6 +279,49 @@ const tcListProjectsInputSchema = z
 
 const tcProjectStateInputSchema = z
   .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const tcTreeReadInputSchema = z
+  .object({
+    path: z.string().trim().min(1, "TwinCAT tree path must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const tcTreeSearchInputSchema = z
+  .object({
+    query: z.string().trim().min(1).optional(),
+    name: z.string().trim().min(1).optional(),
+    type: engineeringTreeItemTypeSchema.optional(),
+    comment: z.string().trim().min(1).optional(),
+    project: z.string().trim().min(1).optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "Tree search limit must be at least 1.")
+      .max(250, "Tree search limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+
+const ioListTopologyInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const ioDescribeDeviceInputSchema = z
+  .object({
+    device: z.string().trim().min(1, "I/O device must not be empty."),
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const ioDescribeTerminalInputSchema = z
+  .object({
+    terminal: z.string().trim().min(1, "I/O terminal must not be empty."),
     project: z.string().trim().min(1).optional(),
   })
   .strict();
@@ -467,6 +529,16 @@ export interface TcListWorkbenchesToolOutput
   extends EngineeringListWorkbenchesResult {}
 export interface TcListProjectsToolOutput extends EngineeringListProjectsResult {}
 export interface TcProjectStateToolOutput extends EngineeringProjectStateResult {}
+export interface TcTreeReadToolOutput extends EngineeringTreeReadResult {}
+export interface TcTreeSearchToolOutput extends EngineeringTreeSearchResult {}
+export interface TcTreeDescribeItemToolOutput
+  extends EngineeringTreeDescribeItemResult {}
+export interface IoListTopologyToolOutput
+  extends EngineeringIoListTopologyResult {}
+export interface IoDescribeDeviceToolOutput
+  extends EngineeringIoDescribeDeviceResult {}
+export interface IoDescribeTerminalToolOutput
+  extends EngineeringIoDescribeTerminalResult {}
 export interface PlcWriteToolOutput {
   readonly result: {
     readonly name: string;
@@ -616,6 +688,27 @@ export function createToolDefinitions(): Array<
   | ToolDefinition<
       z.infer<typeof tcProjectStateInputSchema>,
       TcProjectStateToolOutput
+    >
+  | ToolDefinition<z.infer<typeof tcTreeReadInputSchema>, TcTreeReadToolOutput>
+  | ToolDefinition<
+      z.infer<typeof tcTreeSearchInputSchema>,
+      TcTreeSearchToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof tcTreeReadInputSchema>,
+      TcTreeDescribeItemToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof ioListTopologyInputSchema>,
+      IoListTopologyToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof ioDescribeDeviceInputSchema>,
+      IoDescribeDeviceToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof ioDescribeTerminalInputSchema>,
+      IoDescribeTerminalToolOutput
     >
   | ToolDefinition<z.infer<typeof stateInputSchema>, PlcStateToolOutput>
   | ToolDefinition<z.infer<typeof writeInputSchema>, PlcWriteToolOutput>
@@ -873,6 +966,106 @@ export function createToolDefinitions(): Array<
         ),
     }),
     createToolDefinition({
+      name: "tc_tree_read",
+      description:
+        "Read one TwinCAT/System Manager tree item from configured project files.",
+      inputSchema: tcTreeReadInputSchema,
+      handler: async (input, context) =>
+        context.runtime.tcTreeRead(
+          input.project === undefined
+            ? { path: input.path }
+            : { path: input.path, project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "tc_tree_search",
+      description:
+        "Search TwinCAT/System Manager tree items by text, name, type, comment, or project.",
+      inputSchema: tcTreeSearchInputSchema,
+      handler: async (input, context) => {
+        const searchInput: {
+          query?: string;
+          name?: string;
+          type?: EngineeringTreeItemType;
+          comment?: string;
+          project?: string;
+          limit?: number;
+        } = {};
+
+        if (input.query !== undefined) {
+          searchInput.query = input.query;
+        }
+
+        if (input.name !== undefined) {
+          searchInput.name = input.name;
+        }
+
+        if (input.type !== undefined) {
+          searchInput.type = input.type;
+        }
+
+        if (input.comment !== undefined) {
+          searchInput.comment = input.comment;
+        }
+
+        if (input.project !== undefined) {
+          searchInput.project = input.project;
+        }
+
+        if (input.limit !== undefined) {
+          searchInput.limit = input.limit;
+        }
+
+        return context.runtime.tcTreeSearch(searchInput);
+      },
+    }),
+    createToolDefinition({
+      name: "tc_tree_describe_item",
+      description:
+        "Describe a TwinCAT/System Manager tree item with settings and children.",
+      inputSchema: tcTreeReadInputSchema,
+      handler: async (input, context) =>
+        context.runtime.tcTreeDescribeItem(
+          input.project === undefined
+            ? { path: input.path }
+            : { path: input.path, project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "io_list_topology",
+      description:
+        "List read-only I/O topology from configured TwinCAT engineering project files.",
+      inputSchema: ioListTopologyInputSchema,
+      handler: async (input, context) =>
+        context.runtime.ioListTopology(
+          input.project === undefined ? {} : { project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "io_describe_device",
+      description:
+        "Describe one read-only I/O device and its boxes and terminals from engineering project files.",
+      inputSchema: ioDescribeDeviceInputSchema,
+      handler: async (input, context) =>
+        context.runtime.ioDescribeDevice(
+          input.project === undefined
+            ? { device: input.device }
+            : { device: input.device, project: input.project },
+        ),
+    }),
+    createToolDefinition({
+      name: "io_describe_terminal",
+      description:
+        "Describe one read-only I/O terminal from configured TwinCAT engineering project files.",
+      inputSchema: ioDescribeTerminalInputSchema,
+      handler: async (input, context) =>
+        context.runtime.ioDescribeTerminal(
+          input.project === undefined
+            ? { terminal: input.terminal }
+            : { terminal: input.terminal, project: input.project },
+        ),
+    }),
+    createToolDefinition({
       name: "plc_watch",
       description:
         "Register or reuse a PLC notification watch for a symbol.",
@@ -1013,6 +1206,11 @@ export {
   tcLogReadInputSchema,
   tcListProjectsInputSchema,
   tcProjectStateInputSchema,
+  tcTreeReadInputSchema,
+  tcTreeSearchInputSchema,
+  ioListTopologyInputSchema,
+  ioDescribeDeviceInputSchema,
+  ioDescribeTerminalInputSchema,
   stateInputSchema,
   writeInputSchema,
   setWriteModeInputSchema,

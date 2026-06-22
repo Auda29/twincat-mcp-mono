@@ -44,7 +44,14 @@ import {
   EngineeringService,
   type EngineeringListProjectsResult,
   type EngineeringListWorkbenchesResult,
+  type EngineeringIoDescribeDeviceResult,
+  type EngineeringIoDescribeTerminalResult,
+  type EngineeringIoListTopologyResult,
   type EngineeringProjectStateResult,
+  type EngineeringTreeDescribeItemResult,
+  type EngineeringTreeItemType,
+  type EngineeringTreeReadResult,
+  type EngineeringTreeSearchResult,
 } from "./engineering.js";
 
 export interface ReadSymbolInput {
@@ -100,6 +107,36 @@ export interface TcListProjectsInput {
 }
 
 export interface TcProjectStateInput {
+  readonly project?: string | undefined;
+}
+
+export interface TcTreeReadInput {
+  readonly path: string;
+  readonly project?: string | undefined;
+}
+
+export interface TcTreeSearchInput {
+  readonly query?: string | undefined;
+  readonly name?: string | undefined;
+  readonly type?: EngineeringTreeItemType | undefined;
+  readonly comment?: string | undefined;
+  readonly project?: string | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface TcTreeDescribeItemInput extends TcTreeReadInput {}
+
+export interface IoListTopologyInput {
+  readonly project?: string | undefined;
+}
+
+export interface IoDescribeDeviceInput {
+  readonly device: string;
+  readonly project?: string | undefined;
+}
+
+export interface IoDescribeTerminalInput {
+  readonly terminal: string;
   readonly project?: string | undefined;
 }
 
@@ -162,6 +199,18 @@ export interface TwinCatAdsOperations {
   tcListWorkbenches(): EngineeringListWorkbenchesResult;
   tcListProjects(input?: TcListProjectsInput): EngineeringListProjectsResult;
   tcProjectState(input?: TcProjectStateInput): EngineeringProjectStateResult;
+  tcTreeRead(input: TcTreeReadInput): EngineeringTreeReadResult;
+  tcTreeSearch(input?: TcTreeSearchInput): EngineeringTreeSearchResult;
+  tcTreeDescribeItem(
+    input: TcTreeDescribeItemInput,
+  ): EngineeringTreeDescribeItemResult;
+  ioListTopology(input?: IoListTopologyInput): EngineeringIoListTopologyResult;
+  ioDescribeDevice(
+    input: IoDescribeDeviceInput,
+  ): EngineeringIoDescribeDeviceResult;
+  ioDescribeTerminal(
+    input: IoDescribeTerminalInput,
+  ): EngineeringIoDescribeTerminalResult;
   writeSymbol<T = unknown>(
     input: WriteSymbolInput<T>,
   ): Promise<PlcWriteResult<T>>;
@@ -231,6 +280,12 @@ export function createTwinCatAdsRuntime(
     tcListWorkbenches: () => engineering.listWorkbenches(),
     tcListProjects: (input = {}) => engineering.listProjects(input),
     tcProjectState: (input = {}) => engineering.projectState(input),
+    tcTreeRead: (input) => engineering.treeRead(input),
+    tcTreeSearch: (input = {}) => engineering.treeSearch(input),
+    tcTreeDescribeItem: (input) => engineering.treeDescribeItem(input),
+    ioListTopology: (input = {}) => engineering.ioListTopology(input),
+    ioDescribeDevice: (input) => engineering.ioDescribeDevice(input),
+    ioDescribeTerminal: (input) => engineering.ioDescribeTerminal(input),
     writeSymbol: async (input) => service.writeSymbol(input.name, input.value),
     waitUntil: async (input) => service.waitUntil(input),
     watchSymbol: async (input) => {
