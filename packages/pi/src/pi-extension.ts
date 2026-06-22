@@ -45,6 +45,56 @@ const diagnosticSeverityInputType = Type.Union([
   diagnosticSeverityType,
   Type.Array(diagnosticSeverityType, { minItems: 1, maxItems: 6 }),
 ]);
+const engineeringProjectTypeType = Type.Union([
+  Type.Literal("solution"),
+  Type.Literal("sysManager"),
+  Type.Literal("plc"),
+  Type.Literal("hmi"),
+  Type.Literal("unknown"),
+]);
+const engineeringTreeItemTypeType = Type.Union([
+  Type.Literal("project"),
+  Type.Literal("systemManager"),
+  Type.Literal("io"),
+  Type.Literal("device"),
+  Type.Literal("box"),
+  Type.Literal("terminal"),
+  Type.Literal("task"),
+  Type.Literal("xmlElement"),
+  Type.Literal("unknown"),
+]);
+const engineeringPlcObjectKindType = Type.Union([
+  Type.Literal("program"),
+  Type.Literal("functionBlock"),
+  Type.Literal("function"),
+  Type.Literal("gvl"),
+  Type.Literal("dut"),
+  Type.Literal("interface"),
+  Type.Literal("method"),
+  Type.Literal("action"),
+  Type.Literal("property"),
+  Type.Literal("unknown"),
+]);
+const engineeringIssueSeverityType = Type.Union([
+  Type.Literal("error"),
+  Type.Literal("warning"),
+  Type.Literal("info"),
+]);
+const engineeringIssueSeverityInputType = Type.Union([
+  engineeringIssueSeverityType,
+  Type.Array(engineeringIssueSeverityType, { minItems: 1, maxItems: 3 }),
+]);
+const engineeringOutputChannelType = Type.Union([
+  Type.Literal("build"),
+  Type.Literal("engineering"),
+]);
+const engineeringHmiArtifactKindType = Type.Union([
+  Type.Literal("view"),
+  Type.Literal("control"),
+  Type.Literal("userControl"),
+  Type.Literal("content"),
+  Type.Literal("unknown"),
+]);
 
 function textContent(text: string) {
   return [{ type: "text" as const, text }];
@@ -887,6 +937,358 @@ const toolSpecs: ToolSpec[] = [
         since: Type.Optional(Type.String({ minLength: 1 })),
         until: Type.Optional(Type.String({ minLength: 1 })),
         contains: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_list_workbenches",
+    label: "TwinCAT Engineering Workbenches",
+    description:
+      "List configured TwinCAT engineering workbenches and backend capabilities.",
+    parameters: emptySchema,
+  },
+  {
+    name: "tc_list_projects",
+    label: "TwinCAT Engineering Projects",
+    description:
+      "List read-only TwinCAT engineering projects from configured project files.",
+    parameters: Type.Object(
+      {
+        workbenchId: Type.Optional(Type.String({ minLength: 1 })),
+        type: Type.Optional(engineeringProjectTypeType),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_project_state",
+    label: "TwinCAT Engineering Project State",
+    description:
+      "Describe read-only TwinCAT engineering project files, type, backend source, and live-connection availability.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_build_project",
+    label: "TwinCAT Build Project",
+    description:
+      "Build a configured TwinCAT/XAE engineering project when a live build backend is available.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        target: Type.Optional(Type.String({ minLength: 1 })),
+        timeoutMs: Type.Optional(
+          Type.Integer({ minimum: 1_000, maximum: 3_600_000 }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_build_project",
+    label: "PLC Build Project",
+    description:
+      "Build a configured PLC engineering project when it can be addressed separately by the active backend.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        target: Type.Optional(Type.String({ minLength: 1 })),
+        timeoutMs: Type.Optional(
+          Type.Integer({ minimum: 1_000, maximum: 3_600_000 }),
+        ),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_build_and_get_errors",
+    label: "TwinCAT Build And Get Errors",
+    description:
+      "Run a bounded TwinCAT build and return structured engineering errors and warnings.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        target: Type.Optional(Type.String({ minLength: 1 })),
+        timeoutMs: Type.Optional(
+          Type.Integer({ minimum: 1_000, maximum: 3_600_000 }),
+        ),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 250 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_error_list",
+    label: "TwinCAT Engineering Errors",
+    description:
+      "List bounded engineering, compiler, or parser errors and warnings from the active engineering backend.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        severity: Type.Optional(engineeringIssueSeverityInputType),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 250 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_error_context",
+    label: "TwinCAT Engineering Error Context",
+    description:
+      "Resolve one engineering error to bounded source-file context when location data is available.",
+    parameters: Type.Object(
+      {
+        error: Type.Optional(Type.String({ minLength: 1 })),
+        file: Type.Optional(Type.String({ minLength: 1 })),
+        line: Type.Optional(Type.Integer({ minimum: 1 })),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        contextLines: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_output_read",
+    label: "TwinCAT Engineering Output",
+    description:
+      "Read bounded build or engineering output from the active engineering backend.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        channel: Type.Optional(engineeringOutputChannelType),
+        contains: Type.Optional(Type.String({ minLength: 1 })),
+        limitBytes: Type.Optional(
+          Type.Integer({ minimum: 1_024, maximum: 1_048_576 }),
+        ),
+        tailLines: Type.Optional(Type.Integer({ minimum: 1, maximum: 5_000 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_resource_read",
+    label: "TwinCAT Engineering Resource Read",
+    description:
+      "Dereference bounded TwinCAT engineering resource URIs such as plcc, err, io, tcfile, and tcfolder.",
+    parameters: Type.Object(
+      {
+        uri: Type.String({ minLength: 1 }),
+        limitBytes: Type.Optional(
+          Type.Integer({ minimum: 1_024, maximum: 1_048_576 }),
+        ),
+        contextLines: Type.Optional(Type.Integer({ minimum: 0, maximum: 20 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "hmi_state",
+    label: "HMI State",
+    description:
+      "Inspect read-only HMI engineering project state, inferred ports, and preview availability.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "hmi_list_projects",
+    label: "HMI Projects",
+    description: "List configured HMI engineering projects from project files.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "hmi_preview_info",
+    label: "HMI Preview Info",
+    description:
+      "Describe whether a configured HMI project has enough live backend information for preview.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "hmi_list_controls",
+    label: "HMI Controls",
+    description:
+      "List HMI view, control, user-control, and content artifacts referenced by configured HMI project files.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        kind: Type.Optional(engineeringHmiArtifactKindType),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 250 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_tree_read",
+    label: "TwinCAT Tree Read",
+    description:
+      "Read one TwinCAT/System Manager tree item from configured project files.",
+    parameters: Type.Object(
+      {
+        path: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_tree_search",
+    label: "TwinCAT Tree Search",
+    description:
+      "Search TwinCAT/System Manager tree items by text, name, type, comment, or project.",
+    parameters: Type.Object(
+      {
+        query: Type.Optional(Type.String({ minLength: 1 })),
+        name: Type.Optional(Type.String({ minLength: 1 })),
+        type: Type.Optional(engineeringTreeItemTypeType),
+        comment: Type.Optional(Type.String({ minLength: 1 })),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 250 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "tc_tree_describe_item",
+    label: "TwinCAT Tree Describe Item",
+    description:
+      "Describe a TwinCAT/System Manager tree item with settings and children.",
+    parameters: Type.Object(
+      {
+        path: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "io_list_topology",
+    label: "I/O List Topology",
+    description:
+      "List read-only I/O topology from configured TwinCAT engineering project files.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "io_describe_device",
+    label: "I/O Describe Device",
+    description:
+      "Describe one read-only I/O device and its boxes and terminals from engineering project files.",
+    parameters: Type.Object(
+      {
+        device: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "io_describe_terminal",
+    label: "I/O Describe Terminal",
+    description:
+      "Describe one read-only I/O terminal from configured TwinCAT engineering project files.",
+    parameters: Type.Object(
+      {
+        terminal: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_list_pous",
+    label: "PLC List POUs",
+    description:
+      "List read-only PLC objects such as programs, function blocks, functions, GVLs, DUTs, interfaces, methods, actions, and properties from configured PLC projects.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        kind: Type.Optional(engineeringPlcObjectKindType),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_read_pou",
+    label: "PLC Read POU",
+    description:
+      "Read declaration and implementation text for one configured PLC object.",
+    parameters: Type.Object(
+      {
+        pou: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_search_code",
+    label: "PLC Search Code",
+    description:
+      "Search declaration and implementation text across configured PLC objects with bounded results.",
+    parameters: Type.Object(
+      {
+        query: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+        kind: Type.Optional(engineeringPlcObjectKindType),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 250 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_describe_pou",
+    label: "PLC Describe POU",
+    description:
+      "Describe one configured PLC object with kind, source path, and declaration/implementation previews.",
+    parameters: Type.Object(
+      {
+        pou: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_list_libraries",
+    label: "PLC List Libraries",
+    description: "List read-only PLC library references from configured PLC projects.",
+    parameters: Type.Object(
+      {
+        project: Type.Optional(Type.String({ minLength: 1 })),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  {
+    name: "plc_describe_library",
+    label: "PLC Describe Library",
+    description: "Describe one PLC library reference from configured PLC projects.",
+    parameters: Type.Object(
+      {
+        library: Type.String({ minLength: 1 }),
+        project: Type.Optional(Type.String({ minLength: 1 })),
       },
       { additionalProperties: false },
     ),

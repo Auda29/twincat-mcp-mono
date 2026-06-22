@@ -1,6 +1,6 @@
 {
   "name": "twincat-mcp-monorepo",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Official TwinCAT MCP monorepo for ADS core, Pi extension, and MCP server packages.",
   "author": "Niklas W",
   "license": "MIT",
