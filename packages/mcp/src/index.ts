@@ -379,6 +379,26 @@ const tcOutputReadInputSchema = z
       .optional(),
   })
   .strict();
+const tcResourceReadInputSchema = z
+  .object({
+    uri: z
+      .string()
+      .trim()
+      .min(1, "Engineering resource URI must not be empty."),
+    limitBytes: z
+      .number()
+      .int()
+      .min(1_024, "Resource byte limit must be at least 1024 bytes.")
+      .max(1_048_576, "Resource byte limit must be 1048576 bytes or lower.")
+      .optional(),
+    contextLines: z
+      .number()
+      .int()
+      .min(0, "Context line count must be 0 or higher.")
+      .max(20, "Context line count must be 20 or lower.")
+      .optional(),
+  })
+  .strict();
 const tcTreeReadInputSchema = z
   .object({
     path: z.string().trim().min(1, "TwinCAT tree path must not be empty."),
@@ -1028,6 +1048,16 @@ export function createMcpToolDefinitions(
       annotations: { readOnlyHint: true, openWorldHint: false },
       execute: async (input: z.infer<typeof tcOutputReadInputSchema>) =>
         runtime.tcOutputRead(input),
+    },
+    {
+      name: "tc_resource_read",
+      title: "TwinCAT Engineering Resource Read",
+      description:
+        "Dereference bounded TwinCAT engineering resource URIs such as plcc, err, io, tcfile, and tcfolder.",
+      inputSchema: tcResourceReadInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcResourceReadInputSchema>) =>
+        runtime.tcResourceRead(input),
     },
     {
       name: "tc_tree_read",

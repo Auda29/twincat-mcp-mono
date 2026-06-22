@@ -565,6 +565,16 @@ function createRuntimeStub(
       truncated: false,
       reason: "No live XAE backend.",
     }),
+    tcResourceRead: ({ uri }: { uri: string }) => ({
+      uri,
+      scheme: "tcfile" as const,
+      kind: "file" as const,
+      available: true,
+      contentType: "text/plain",
+      text: "Project file",
+      bytesRead: 12,
+      truncated: false,
+    }),
     tcTreeRead: async () => ({
       item: {
         id: "tree:terminal",
@@ -894,6 +904,7 @@ describe("mcp tool definitions", () => {
       "tc_error_list",
       "tc_error_context",
       "tc_output_read",
+      "tc_resource_read",
       "tc_tree_read",
       "tc_tree_search",
       "tc_tree_describe_item",
@@ -1190,6 +1201,16 @@ describe("mcp tool definitions", () => {
     expect(output.structuredContent).toMatchObject({
       available: false,
       channel: "build",
+    });
+
+    const resource = await callMcpTool(tools, "tc_resource_read", {
+      uri: "tcfile://file?path=C%3A%5C%5CMachine%5C%5CMachine.tsproj",
+    });
+    expect(resource.isError).toBeUndefined();
+    expect(resource.structuredContent).toMatchObject({
+      uri: expect.stringContaining("tcfile://file"),
+      available: true,
+      kind: "file",
     });
 
     const treeSearch = await callMcpTool(tools, "tc_tree_search", {

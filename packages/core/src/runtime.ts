@@ -63,6 +63,7 @@ import {
   type EngineeringPlcObjectKind,
   type EngineeringPlcReadPouResult,
   type EngineeringPlcSearchCodeResult,
+  type EngineeringResourceReadResult,
   type EngineeringTreeDescribeItemResult,
   type EngineeringTreeItemType,
   type EngineeringTreeReadResult,
@@ -157,6 +158,12 @@ export interface TcOutputReadInput {
   readonly contains?: string | undefined;
   readonly limitBytes?: number | undefined;
   readonly tailLines?: number | undefined;
+}
+
+export interface TcResourceReadInput {
+  readonly uri: string;
+  readonly limitBytes?: number | undefined;
+  readonly contextLines?: number | undefined;
 }
 
 export interface TcTreeReadInput {
@@ -284,6 +291,7 @@ export interface TwinCatAdsOperations {
   tcErrorList(input?: TcErrorListInput): EngineeringErrorListResult;
   tcErrorContext(input: TcErrorContextInput): EngineeringErrorContextResult;
   tcOutputRead(input?: TcOutputReadInput): EngineeringOutputReadResult;
+  tcResourceRead(input: TcResourceReadInput): EngineeringResourceReadResult;
   tcTreeRead(input: TcTreeReadInput): EngineeringTreeReadResult;
   tcTreeSearch(input?: TcTreeSearchInput): EngineeringTreeSearchResult;
   tcTreeDescribeItem(
@@ -382,6 +390,7 @@ export function createTwinCatAdsRuntime(
     tcErrorList: (input = {}) => engineering.tcErrorList(input),
     tcErrorContext: (input) => engineering.tcErrorContext(input),
     tcOutputRead: (input = {}) => engineering.tcOutputRead(input),
+    tcResourceRead: (input) => engineering.tcResourceRead(input),
     tcTreeRead: (input) => engineering.treeRead(input),
     tcTreeSearch: (input = {}) => engineering.treeSearch(input),
     tcTreeDescribeItem: (input) => engineering.treeDescribeItem(input),

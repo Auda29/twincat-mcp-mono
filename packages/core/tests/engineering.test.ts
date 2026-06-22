@@ -135,6 +135,7 @@ describe("engineering project context", () => {
         type: "terminal",
         comment: "Digital inputs",
       });
+      expect(terminals.items[0]?.resourceUri).toMatch(/^io:\/\/item\?/);
 
       const terminal = engineering.treeRead({ path: "Term 2 (EL1008)" });
       expect(terminal.item.settings).toMatchObject({
@@ -143,6 +144,16 @@ describe("engineering project context", () => {
       });
       expect(terminal.item.children[0]).toMatchObject({
         name: "Input 1",
+      });
+
+      const terminalResource = engineering.tcResourceRead({
+        uri: terminal.item.resourceUri!,
+      });
+      expect(terminalResource).toMatchObject({
+        scheme: "io",
+        kind: "ioItem",
+        available: true,
+        data: { item: { name: "Term 2 (EL1008)" } },
       });
 
       const topology = engineering.ioListTopology();
@@ -299,6 +310,9 @@ describe("engineering project context", () => {
       expect(pous.pous.find((pou) => pou.name === "MAIN")).toMatchObject({
         kind: "program",
       });
+      expect(pous.pous.find((pou) => pou.name === "MAIN")?.resourceUri).toMatch(
+        /^plcc:\/\/pou\?/,
+      );
       expect(pous.pous.find((pou) => pou.name === "FB_Valve")).toMatchObject({
         kind: "functionBlock",
       });
@@ -323,6 +337,18 @@ describe("engineering project context", () => {
       const main = engineering.plcReadPou({ pou: "MAIN" });
       expect(main.pou.declaration).toContain("PROGRAM MAIN");
       expect(main.pou.implementation).toContain("fbValve.Open");
+
+      const mainResource = engineering.tcResourceRead({
+        uri: main.pou.resourceUri!,
+        limitBytes: 1024,
+      });
+      expect(mainResource).toMatchObject({
+        scheme: "plcc",
+        kind: "plcObject",
+        available: true,
+        data: { pou: { name: "MAIN", kind: "program" } },
+      });
+      expect(mainResource.text).toContain("PROGRAM MAIN");
 
       const reset = engineering.plcReadPou({ pou: "FB_Valve.Reset" });
       expect(reset.pou.declaration).toContain("METHOD Reset");
@@ -370,6 +396,7 @@ describe("engineering project context", () => {
         name: "Tc2_Standard",
         version: "3.3.3.0",
         namespace: "Tc2_Standard",
+        sourceFileUri: expect.stringMatching(/^tcfile:\/\/file\?/),
       });
 
       const library = engineering.plcDescribeLibrary({
@@ -465,6 +492,28 @@ describe("engineering project context", () => {
         },
       });
       expect(context.context?.text).toContain("<ItemGroup>");
+
+      const project = engineering.listProjects().projects[0]!;
+      const fileResource = engineering.tcResourceRead({
+        uri: project.resourceUri!,
+        limitBytes: 1024,
+      });
+      expect(fileResource).toMatchObject({
+        scheme: "tcfile",
+        kind: "file",
+        available: true,
+      });
+      expect(fileResource.text).toContain("<Project");
+
+      const folderResource = engineering.tcResourceRead({
+        uri: project.folderUri!,
+      });
+      expect(folderResource).toMatchObject({
+        scheme: "tcfolder",
+        kind: "folder",
+        available: true,
+        data: { entries: expect.arrayContaining([expect.objectContaining({ name: "Machine.tsproj" })]) },
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

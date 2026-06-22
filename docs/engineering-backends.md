@@ -83,3 +83,10 @@ inside configured project directories.
 Safety boundary: build/compile tools must not automatically activate
 configuration, download, login, start, stop, force values, or touch Safety
 configuration. Those actions remain separate and require explicit user intent.
+
+## Resource URIs
+
+Task 24 adds resource references for engineering artifacts plus
+`tc_resource_read` for bounded dereferencing. See
+`docs/engineering-resource-uris.md` for the versioned URI schemes and MCP
+Resources/Subscriptions decision.

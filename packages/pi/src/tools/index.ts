@@ -21,6 +21,7 @@ import {
   type EngineeringPlcObjectKind,
   type EngineeringPlcReadPouResult,
   type EngineeringPlcSearchCodeResult,
+  type EngineeringResourceReadResult,
   type EngineeringTreeDescribeItemResult,
   type EngineeringTreeItemType,
   type EngineeringTreeReadResult,
@@ -394,6 +395,27 @@ const tcOutputReadInputSchema = z
   })
   .strict();
 
+const tcResourceReadInputSchema = z
+  .object({
+    uri: z
+      .string()
+      .trim()
+      .min(1, "Engineering resource URI must not be empty."),
+    limitBytes: z
+      .number()
+      .int()
+      .min(1_024, "Resource byte limit must be at least 1024 bytes.")
+      .max(1_048_576, "Resource byte limit must be 1048576 bytes or lower.")
+      .optional(),
+    contextLines: z
+      .number()
+      .int()
+      .min(0, "Context line count must be 0 or higher.")
+      .max(20, "Context line count must be 20 or lower.")
+      .optional(),
+  })
+  .strict();
+
 const tcTreeReadInputSchema = z
   .object({
     path: z.string().trim().min(1, "TwinCAT tree path must not be empty."),
@@ -688,6 +710,7 @@ export interface TcBuildAndGetErrorsToolOutput
 export interface TcErrorListToolOutput extends EngineeringErrorListResult {}
 export interface TcErrorContextToolOutput extends EngineeringErrorContextResult {}
 export interface TcOutputReadToolOutput extends EngineeringOutputReadResult {}
+export interface TcResourceReadToolOutput extends EngineeringResourceReadResult {}
 export interface TcTreeReadToolOutput extends EngineeringTreeReadResult {}
 export interface TcTreeSearchToolOutput extends EngineeringTreeSearchResult {}
 export interface TcTreeDescribeItemToolOutput
@@ -876,6 +899,10 @@ export function createToolDefinitions(): Array<
       TcErrorContextToolOutput
     >
   | ToolDefinition<z.infer<typeof tcOutputReadInputSchema>, TcOutputReadToolOutput>
+  | ToolDefinition<
+      z.infer<typeof tcResourceReadInputSchema>,
+      TcResourceReadToolOutput
+    >
   | ToolDefinition<z.infer<typeof tcTreeReadInputSchema>, TcTreeReadToolOutput>
   | ToolDefinition<
       z.infer<typeof tcTreeSearchInputSchema>,
@@ -1212,6 +1239,13 @@ export function createToolDefinitions(): Array<
         "Read bounded build or engineering output from the active engineering backend.",
       inputSchema: tcOutputReadInputSchema,
       handler: async (input, context) => context.runtime.tcOutputRead(input),
+    }),
+    createToolDefinition({
+      name: "tc_resource_read",
+      description:
+        "Dereference bounded TwinCAT engineering resource URIs such as plcc, err, io, tcfile, and tcfolder.",
+      inputSchema: tcResourceReadInputSchema,
+      handler: async (input, context) => context.runtime.tcResourceRead(input),
     }),
     createToolDefinition({
       name: "tc_tree_read",

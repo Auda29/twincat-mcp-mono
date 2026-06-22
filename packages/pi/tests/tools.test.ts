@@ -591,6 +591,16 @@ function createRuntimeStub() {
       truncated: false,
       reason: "No live XAE backend.",
     }),
+    tcResourceRead: ({ uri }: { uri: string }) => ({
+      uri,
+      scheme: "tcfile" as const,
+      kind: "file" as const,
+      available: true,
+      contentType: "text/plain",
+      text: "Project file",
+      bytesRead: 12,
+      truncated: false,
+    }),
     tcTreeRead: async () => ({
       item: {
         id: "tree:terminal",
@@ -1050,6 +1060,9 @@ describe("tools", () => {
     const outputReadTool = tools.find(
       (entry) => entry.name === "tc_output_read",
     );
+    const resourceReadTool = tools.find(
+      (entry) => entry.name === "tc_resource_read",
+    );
     const treeReadTool = tools.find((entry) => entry.name === "tc_tree_read");
     const treeSearchTool = tools.find((entry) => entry.name === "tc_tree_search");
     const treeDescribeTool = tools.find(
@@ -1080,6 +1093,7 @@ describe("tools", () => {
     expect(errorListTool).toBeDefined();
     expect(errorContextTool).toBeDefined();
     expect(outputReadTool).toBeDefined();
+    expect(resourceReadTool).toBeDefined();
     expect(treeReadTool).toBeDefined();
     expect(treeSearchTool).toBeDefined();
     expect(treeDescribeTool).toBeDefined();
@@ -1229,6 +1243,16 @@ describe("tools", () => {
     expect(outputRead.ok).toBe(true);
     if (outputRead.ok) {
       expect(outputRead.data.channel).toBe("build");
+    }
+
+    const resourceRead = await resourceReadTool!.execute(
+      { uri: "tcfile://file?path=C%3A%5C%5CMachine%5C%5CMachine.tsproj" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(resourceRead.ok).toBe(true);
+    if (resourceRead.ok) {
+      expect(resourceRead.data.kind).toBe("file");
+      expect(resourceRead.data.available).toBe(true);
     }
 
     const treeSearch = await treeSearchTool!.execute(

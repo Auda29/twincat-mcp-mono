@@ -1,4 +1,9 @@
-import { existsSync, readFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, normalize } from "node:path";
 
 import { XMLParser } from "fast-xml-parser";
@@ -44,6 +49,8 @@ export interface EngineeringProjectSummary {
   readonly exists: boolean;
   readonly source: EngineeringBackendSource;
   readonly workbenchId: string;
+  readonly resourceUri?: string | undefined;
+  readonly folderUri?: string | undefined;
 }
 
 export interface EngineeringProjectState {
@@ -97,6 +104,7 @@ export type EngineeringTreeItemType =
 
 export interface EngineeringTreeItemSummary {
   readonly id: string;
+  readonly resourceUri?: string | undefined;
   readonly path: string;
   readonly name: string;
   readonly type: EngineeringTreeItemType;
@@ -194,6 +202,7 @@ export type EngineeringPlcObjectKind =
 
 export interface EngineeringPlcPouSummary {
   readonly id: string;
+  readonly resourceUri?: string | undefined;
   readonly name: string;
   readonly qualifiedName: string;
   readonly kind: EngineeringPlcObjectKind;
@@ -260,6 +269,8 @@ export interface EngineeringPlcDescribePouResult {
 
 export interface EngineeringPlcLibrarySummary {
   readonly id: string;
+  readonly resourceUri?: string | undefined;
+  readonly sourceFileUri?: string | undefined;
   readonly name: string;
   readonly sourceFile: string;
   readonly project: EngineeringProjectSummary;
@@ -411,6 +422,41 @@ export interface EngineeringOutputReadResult {
   readonly reason?: string | undefined;
 }
 
+export type EngineeringResourceScheme =
+  | "plcc"
+  | "plcpp"
+  | "err"
+  | "io"
+  | "tcfile"
+  | "tcfolder";
+
+export type EngineeringResourceKind =
+  | "plcObject"
+  | "plcPlusPlusObject"
+  | "engineeringIssue"
+  | "ioItem"
+  | "file"
+  | "folder";
+
+export interface EngineeringResourceReadInput {
+  readonly uri: string;
+  readonly limitBytes?: number | undefined;
+  readonly contextLines?: number | undefined;
+}
+
+export interface EngineeringResourceReadResult {
+  readonly uri: string;
+  readonly scheme: EngineeringResourceScheme;
+  readonly kind: EngineeringResourceKind;
+  readonly available: boolean;
+  readonly contentType?: string | undefined;
+  readonly text?: string | undefined;
+  readonly data?: unknown;
+  readonly bytesRead?: number | undefined;
+  readonly truncated: boolean;
+  readonly reason?: string | undefined;
+}
+
 interface SolutionProjectReference {
   readonly name: string;
   readonly path: string;
@@ -455,6 +501,9 @@ const DEFAULT_ENGINEERING_CONTEXT_LINES = 3;
 const MAX_ENGINEERING_CONTEXT_LINES = 20;
 const DEFAULT_ENGINEERING_OUTPUT_LIMIT_BYTES = 65_536;
 const MAX_ENGINEERING_OUTPUT_LIMIT_BYTES = 1_048_576;
+const DEFAULT_RESOURCE_LIMIT_BYTES = 65_536;
+const MAX_RESOURCE_LIMIT_BYTES = 1_048_576;
+const MAX_FOLDER_RESOURCE_ENTRIES = 250;
 const BUILD_SAFETY_BOUNDARY: EngineeringBuildSafetyBoundary = {
   activateConfiguration: false,
   download: false,
@@ -512,6 +561,85 @@ function normalizeProjectPath(path: string, basePath?: string): string {
   }
 
   return normalize(join(basePath ?? process.cwd(), path));
+}
+
+function encodedQuery(params: Record<string, string>): string {
+  return new URLSearchParams(params).toString();
+}
+
+function tcFileUri(path: string): string {
+  return `tcfile://file?${encodedQuery({ path: normalize(path) })}`;
+}
+
+function tcFolderUri(path: string): string {
+  return `tcfolder://folder?${encodedQuery({ path: normalize(path) })}`;
+}
+
+function plccPouUri(project: EngineeringProjectSummary, qualifiedName: string): string {
+  return `plcc://pou?${encodedQuery({
+    project: project.id,
+    name: qualifiedName,
+  })}`;
+}
+
+function ioItemUri(project: EngineeringProjectSummary, treePath: string): string {
+  return `io://item?${encodedQuery({
+    project: project.id,
+    path: treePath,
+  })}`;
+}
+
+function limitBytes(value: string, maxBytes: number): {
+  readonly text: string;
+  readonly bytesRead: number;
+  readonly truncated: boolean;
+} {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= maxBytes) {
+    return {
+      text: value,
+      bytesRead: bytes.length,
+      truncated: false,
+    };
+  }
+
+  return {
+    text: bytes.subarray(0, maxBytes).toString("utf8"),
+    bytesRead: maxBytes,
+    truncated: true,
+  };
+}
+
+function parseEngineeringResourceUri(uri: string): {
+  readonly scheme: EngineeringResourceScheme;
+  readonly kind: EngineeringResourceKind;
+  readonly params: URLSearchParams;
+} {
+  let parsed: URL;
+  try {
+    parsed = new URL(uri);
+  } catch {
+    throw new Error(`Engineering resource URI "${uri}" is not a valid URI.`);
+  }
+
+  const scheme = parsed.protocol.slice(0, -1);
+
+  switch (scheme) {
+    case "plcc":
+      return { scheme, kind: "plcObject", params: parsed.searchParams };
+    case "plcpp":
+      return { scheme, kind: "plcPlusPlusObject", params: parsed.searchParams };
+    case "err":
+      return { scheme, kind: "engineeringIssue", params: parsed.searchParams };
+    case "io":
+      return { scheme, kind: "ioItem", params: parsed.searchParams };
+    case "tcfile":
+      return { scheme, kind: "file", params: parsed.searchParams };
+    case "tcfolder":
+      return { scheme, kind: "folder", params: parsed.searchParams };
+    default:
+      throw new Error(`Engineering resource URI scheme "${scheme}" is not supported.`);
+  }
 }
 
 function asArray(value: unknown): unknown[] {
@@ -1172,6 +1300,7 @@ function findLibraryReferences(
         const id = `${project.id}:library:${include.toLowerCase()}`;
         libraries.set(id, {
           id,
+          sourceFileUri: tcFileUri(sourceFile),
           name: include,
           sourceFile,
           project,
@@ -1711,6 +1840,228 @@ export class EngineeringService {
     };
   }
 
+  tcResourceRead(
+    input: EngineeringResourceReadInput,
+  ): EngineeringResourceReadResult {
+    const parsed = parseEngineeringResourceUri(input.uri.trim());
+    const limit = Math.min(
+      Math.max(input.limitBytes ?? DEFAULT_RESOURCE_LIMIT_BYTES, 1),
+      MAX_RESOURCE_LIMIT_BYTES,
+    );
+
+    switch (parsed.scheme) {
+      case "plcc":
+        return this.readPlcResource(input.uri, parsed, limit);
+      case "plcpp":
+        return {
+          uri: input.uri,
+          scheme: parsed.scheme,
+          kind: parsed.kind,
+          available: false,
+          truncated: false,
+          reason:
+            "PLC++ resource URIs are reserved, but no PLC++ engineering backend is implemented yet.",
+        };
+      case "err":
+        return this.readErrorResource(input.uri, parsed, input.contextLines);
+      case "io":
+        return this.readIoResource(input.uri, parsed);
+      case "tcfile":
+        return this.readFileResource(input.uri, parsed, limit);
+      case "tcfolder":
+        return this.readFolderResource(input.uri, parsed);
+    }
+  }
+
+  private readPlcResource(
+    uri: string,
+    parsed: ReturnType<typeof parseEngineeringResourceUri>,
+    limit: number,
+  ): EngineeringResourceReadResult {
+    const pouName = parsed.params.get("name");
+    if (pouName === null || pouName.trim().length === 0) {
+      throw new Error(`PLC code resource URI "${uri}" does not include a name.`);
+    }
+
+    const project = parsed.params.get("project") ?? undefined;
+    const pou = this.findPlcObject(pouName, project);
+    const limited = limitBytes(pou.rawText, limit);
+
+    return {
+      uri,
+      scheme: "plcc",
+      kind: "plcObject",
+      available: true,
+      contentType: "text/x-iecst",
+      text: limited.text,
+      data: {
+        pou: this.toPlcPouSummary(pou),
+        declarationLineCount: lineCount(pou.declaration),
+        implementationLineCount: lineCount(pou.implementation),
+      },
+      bytesRead: limited.bytesRead,
+      truncated: limited.truncated,
+    };
+  }
+
+  private readErrorResource(
+    uri: string,
+    parsed: ReturnType<typeof parseEngineeringResourceUri>,
+    contextLines?: number,
+  ): EngineeringResourceReadResult {
+    const id = parsed.params.get("id");
+    const issue = this.collectEngineeringIssues().find(
+      (entry) => entry.uri === uri || (id !== null && entry.id === id),
+    );
+
+    if (issue === undefined) {
+      return {
+        uri,
+        scheme: "err",
+        kind: "engineeringIssue",
+        available: false,
+        truncated: false,
+        reason:
+          "The requested engineering issue is not available from the active backend.",
+      };
+    }
+
+    const context =
+      issue.file === undefined || issue.line === undefined
+        ? undefined
+        : this.tcErrorContext({
+            error: issue.uri,
+            contextLines,
+          });
+
+    return {
+      uri,
+      scheme: "err",
+      kind: "engineeringIssue",
+      available: true,
+      contentType: "application/json",
+      data: {
+        issue,
+        context: context?.context,
+      },
+      truncated: false,
+    };
+  }
+
+  private readIoResource(
+    uri: string,
+    parsed: ReturnType<typeof parseEngineeringResourceUri>,
+  ): EngineeringResourceReadResult {
+    const path = parsed.params.get("path");
+    if (path === null || path.trim().length === 0) {
+      throw new Error(`I/O resource URI "${uri}" does not include a path.`);
+    }
+
+    const project = parsed.params.get("project") ?? undefined;
+    const item = this.treeRead({ path, project }).item;
+
+    return {
+      uri,
+      scheme: "io",
+      kind: "ioItem",
+      available: true,
+      contentType: "application/json",
+      data: { item },
+      truncated: false,
+    };
+  }
+
+  private readFileResource(
+    uri: string,
+    parsed: ReturnType<typeof parseEngineeringResourceUri>,
+    limit: number,
+  ): EngineeringResourceReadResult {
+    const file = parsed.params.get("path");
+    if (file === null || file.trim().length === 0) {
+      throw new Error(`File resource URI "${uri}" does not include a path.`);
+    }
+
+    const project = parsed.params.get("project") ?? undefined;
+    const resolvedFile = this.resolveProjectFile(file, project);
+    if (resolvedFile === undefined || !existsSync(resolvedFile)) {
+      return {
+        uri,
+        scheme: "tcfile",
+        kind: "file",
+        available: false,
+        truncated: false,
+        reason:
+          "The requested file resource is not part of a configured engineering project.",
+      };
+    }
+
+    const limited = limitBytes(readFileSync(resolvedFile, "utf8"), limit);
+    return {
+      uri,
+      scheme: "tcfile",
+      kind: "file",
+      available: true,
+      contentType: "text/plain",
+      text: limited.text,
+      data: { path: resolvedFile },
+      bytesRead: limited.bytesRead,
+      truncated: limited.truncated,
+    };
+  }
+
+  private readFolderResource(
+    uri: string,
+    parsed: ReturnType<typeof parseEngineeringResourceUri>,
+  ): EngineeringResourceReadResult {
+    const folder = parsed.params.get("path");
+    if (folder === null || folder.trim().length === 0) {
+      throw new Error(`Folder resource URI "${uri}" does not include a path.`);
+    }
+
+    const project = parsed.params.get("project") ?? undefined;
+    const resolvedFolder = this.resolveProjectFolder(folder, project);
+    if (resolvedFolder === undefined || !existsSync(resolvedFolder)) {
+      return {
+        uri,
+        scheme: "tcfolder",
+        kind: "folder",
+        available: false,
+        truncated: false,
+        reason:
+          "The requested folder resource is not part of a configured engineering project.",
+      };
+    }
+
+    const entries = readdirSync(resolvedFolder)
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, MAX_FOLDER_RESOURCE_ENTRIES)
+      .map((entry) => {
+        const path = join(resolvedFolder, entry);
+        const stats = statSync(path);
+        return {
+          name: entry,
+          path,
+          type: stats.isDirectory() ? "folder" : "file",
+          size: stats.isDirectory() ? undefined : stats.size,
+          resourceUri: stats.isDirectory() ? tcFolderUri(path) : tcFileUri(path),
+        };
+      });
+
+    return {
+      uri,
+      scheme: "tcfolder",
+      kind: "folder",
+      available: true,
+      contentType: "application/json",
+      data: {
+        path: resolvedFolder,
+        entries,
+        count: entries.length,
+      },
+      truncated: entries.length >= MAX_FOLDER_RESOURCE_ENTRIES,
+    };
+  }
+
   private createUnavailableBuildResult(
     input: EngineeringBuildInput,
     scope: EngineeringBuildScope,
@@ -1784,6 +2135,28 @@ export class EngineeringService {
     return undefined;
   }
 
+  private resolveProjectFolder(
+    folder: string,
+    projectFilter?: string,
+  ): string | undefined {
+    const projects = this.filterProjects(projectFilter);
+    for (const project of projects) {
+      const projectDirectory = dirname(project.path);
+      const resolved = normalizeProjectPath(folder, projectDirectory);
+      const normalizedProjectDirectory = normalize(projectDirectory).toLowerCase();
+      const normalizedResolved = normalize(resolved).toLowerCase();
+
+      if (
+        normalizedResolved === normalizedProjectDirectory ||
+        normalizedResolved.startsWith(`${normalizedProjectDirectory}\\`)
+      ) {
+        return resolved;
+      }
+    }
+
+    return undefined;
+  }
+
   private discoverProjects(): EngineeringProjectSummary[] {
     if (!isEnabledConfiguredBackend(this.config)) {
       return [];
@@ -1818,6 +2191,8 @@ export class EngineeringService {
         exists: existsSync(path),
         source,
         workbenchId: WORKBENCH_ID,
+        resourceUri: tcFileUri(path),
+        folderUri: tcFolderUri(dirname(path)),
       });
     };
 
@@ -2015,6 +2390,7 @@ export class EngineeringService {
   private toTreeItemSummary(item: InternalTreeItem): EngineeringTreeItemSummary {
     return {
       id: item.id,
+      resourceUri: ioItemUri(item.project, item.path),
       path: item.path,
       name: item.name,
       type: item.type,
@@ -2146,6 +2522,7 @@ export class EngineeringService {
 
       return {
         id: `${project.id}:pou:${sourceFile.toLowerCase()}:${qualifiedName.toLowerCase()}:${index}`,
+        resourceUri: plccPouUri(project, qualifiedName),
         name,
         qualifiedName,
         kind,
@@ -2184,6 +2561,7 @@ export class EngineeringService {
   ): EngineeringPlcPouSummary {
     return {
       id: pou.id,
+      resourceUri: plccPouUri(pou.project, pou.qualifiedName),
       name: pou.name,
       qualifiedName: pou.qualifiedName,
       kind: pou.kind,

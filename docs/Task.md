@@ -85,7 +85,7 @@ Fehlerbilder andere sind.
 - Safety-Grenze dokumentieren: Build/Compile darf nicht automatisch Activate Configuration, Download, Login, Start oder Stop ausloesen.
 - Ausgabe immer begrenzen und auf konkrete Fehlerreferenzen statt grosse Dumps optimieren.
 
-### 24. Resource-URI-Schicht fuer Projektartefakte entwerfen `[Open]`
+### 24. Resource-URI-Schicht fuer Projektartefakte entwerfen `[Done]`
 
 - Stabile Resource-URI-Schemata fuer Engineering-Artefakte definieren, inspiriert von CoAgent:
   `plcc://`, `plcpp://`, `err://`, `io://`, `tcfile://`, `tcfolder://`.
