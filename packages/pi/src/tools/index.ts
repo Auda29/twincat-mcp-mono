@@ -2,6 +2,10 @@ import { z } from "zod";
 
 import {
   WriteDeniedError,
+  type EngineeringListProjectsResult,
+  type EngineeringListWorkbenchesResult,
+  type EngineeringProjectStateResult,
+  type EngineeringProjectTypeConfig,
   type IoListGroupsResult,
   type IoReadGroupResult,
   type IoReadManyResult,
@@ -114,6 +118,14 @@ const ioReadGroupInputSchema = z
   .strict();
 
 const stateInputSchema = z.object({}).strict();
+
+const engineeringProjectTypeSchema = z.enum([
+  "solution",
+  "sysManager",
+  "plc",
+  "hmi",
+  "unknown",
+]);
 
 const diagnosticSeveritySchema = z.enum([
   "critical",
@@ -236,6 +248,19 @@ const tcDiagnoseRuntimeInputSchema = z
     since: diagnosticDateTimeSchema.optional(),
     until: diagnosticDateTimeSchema.optional(),
     contains: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const tcListProjectsInputSchema = z
+  .object({
+    workbenchId: z.string().trim().min(1).optional(),
+    type: engineeringProjectTypeSchema.optional(),
+  })
+  .strict();
+
+const tcProjectStateInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -438,6 +463,10 @@ export interface TcRuntimeErrorListToolOutput extends RuntimeErrorListResult {}
 export interface TcLogReadToolOutput extends RuntimeLogReadResult {}
 export interface TcDiagnoseErrorsToolOutput extends TwinCatDiagnoseErrorsResult {}
 export interface TcDiagnoseRuntimeToolOutput extends TwinCatDiagnoseRuntimeResult {}
+export interface TcListWorkbenchesToolOutput
+  extends EngineeringListWorkbenchesResult {}
+export interface TcListProjectsToolOutput extends EngineeringListProjectsResult {}
+export interface TcProjectStateToolOutput extends EngineeringProjectStateResult {}
 export interface PlcWriteToolOutput {
   readonly result: {
     readonly name: string;
@@ -578,6 +607,15 @@ export function createToolDefinitions(): Array<
   | ToolDefinition<
       z.infer<typeof tcDiagnoseRuntimeInputSchema>,
       TcDiagnoseRuntimeToolOutput
+    >
+  | ToolDefinition<z.infer<typeof stateInputSchema>, TcListWorkbenchesToolOutput>
+  | ToolDefinition<
+      z.infer<typeof tcListProjectsInputSchema>,
+      TcListProjectsToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof tcProjectStateInputSchema>,
+      TcProjectStateToolOutput
     >
   | ToolDefinition<z.infer<typeof stateInputSchema>, PlcStateToolOutput>
   | ToolDefinition<z.infer<typeof writeInputSchema>, PlcWriteToolOutput>
@@ -796,6 +834,45 @@ export function createToolDefinitions(): Array<
       handler: async (input, context) => context.runtime.tcDiagnoseRuntime(input),
     }),
     createToolDefinition({
+      name: "tc_list_workbenches",
+      description:
+        "List configured TwinCAT engineering workbenches and backend capabilities.",
+      inputSchema: stateInputSchema,
+      handler: async (_input, context) => context.runtime.tcListWorkbenches(),
+    }),
+    createToolDefinition({
+      name: "tc_list_projects",
+      description:
+        "List read-only TwinCAT engineering projects from configured project files.",
+      inputSchema: tcListProjectsInputSchema,
+      handler: async (input, context) => {
+        const projectInput: {
+          workbenchId?: string;
+          type?: EngineeringProjectTypeConfig;
+        } = {};
+
+        if (input.workbenchId !== undefined) {
+          projectInput.workbenchId = input.workbenchId;
+        }
+
+        if (input.type !== undefined) {
+          projectInput.type = input.type;
+        }
+
+        return context.runtime.tcListProjects(projectInput);
+      },
+    }),
+    createToolDefinition({
+      name: "tc_project_state",
+      description:
+        "Describe read-only TwinCAT engineering project files, type, backend source, and live-connection availability.",
+      inputSchema: tcProjectStateInputSchema,
+      handler: async (input, context) =>
+        context.runtime.tcProjectState(
+          input.project === undefined ? {} : { project: input.project },
+        ),
+    }),
+    createToolDefinition({
       name: "plc_watch",
       description:
         "Register or reuse a PLC notification watch for a symbol.",
@@ -934,6 +1011,8 @@ export {
   ioReadGroupInputSchema,
   tcEventListInputSchema,
   tcLogReadInputSchema,
+  tcListProjectsInputSchema,
+  tcProjectStateInputSchema,
   stateInputSchema,
   writeInputSchema,
   setWriteModeInputSchema,

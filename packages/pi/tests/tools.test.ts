@@ -442,6 +442,76 @@ function createRuntimeStub() {
         runtimeErrors: await runtime.tcRuntimeErrorList(),
       };
     },
+    tcListWorkbenches: () => ({
+      backendCapabilities: [
+        {
+          backend: "configuredProjectFiles" as const,
+          available: true,
+          capabilities: {
+            runtimeOnly: false,
+            engineeringRead: true,
+            engineeringWrite: false,
+          },
+        },
+      ],
+      workbenches: [
+        {
+          id: "configured-project-files",
+          name: "Machine",
+          backend: "configuredProjectFiles" as const,
+          available: true,
+          capabilities: {
+            runtimeOnly: false,
+            engineeringRead: true,
+            engineeringWrite: false,
+          },
+          projectCount: 1,
+        },
+      ],
+      count: 1,
+    }),
+    tcListProjects: () => ({
+      backendCapabilities: [],
+      projects: [
+        {
+          id: "configuredProjectFiles:c:/machine/machine.tsproj",
+          name: "Machine",
+          path: "C:/Machine/Machine.tsproj",
+          type: "sysManager" as const,
+          exists: true,
+          source: "configuredProjectFiles" as const,
+          workbenchId: "configured-project-files",
+        },
+      ],
+      count: 1,
+    }),
+    tcProjectState: () => ({
+      backendCapabilities: [],
+      projects: [
+        {
+          project: {
+            id: "configuredProjectFiles:c:/machine/machine.tsproj",
+            name: "Machine",
+            path: "C:/Machine/Machine.tsproj",
+            type: "sysManager" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+          backend: "configuredProjectFiles" as const,
+          capabilities: {
+            runtimeOnly: false,
+            engineeringRead: true,
+            engineeringWrite: false,
+          },
+          activeConnection: {
+            available: false,
+            source: "none" as const,
+          },
+        },
+      ],
+      count: 1,
+    }),
     readState: async () => ({
       connection: { connected: true },
       adsState: "connected" as const,
@@ -679,12 +749,22 @@ describe("tools", () => {
     const diagnoseRuntimeTool = tools.find(
       (entry) => entry.name === "tc_diagnose_runtime",
     );
+    const workbenchesTool = tools.find(
+      (entry) => entry.name === "tc_list_workbenches",
+    );
+    const projectsTool = tools.find((entry) => entry.name === "tc_list_projects");
+    const projectStateTool = tools.find(
+      (entry) => entry.name === "tc_project_state",
+    );
     expect(stateTool).toBeDefined();
     expect(eventsTool).toBeDefined();
     expect(errorsTool).toBeDefined();
     expect(logTool).toBeDefined();
     expect(diagnoseErrorsTool).toBeDefined();
     expect(diagnoseRuntimeTool).toBeDefined();
+    expect(workbenchesTool).toBeDefined();
+    expect(projectsTool).toBeDefined();
+    expect(projectStateTool).toBeDefined();
 
     const state = await stateTool!.execute(
       {},
@@ -740,6 +820,35 @@ describe("tools", () => {
     if (diagnoseRuntime.ok) {
       expect(diagnoseRuntime.data.summary.configuredIoDataPoints).toBe(1);
       expect(diagnoseRuntime.data.summary.runtimeErrorCount).toBe(1);
+    }
+
+    const workbenches = await workbenchesTool!.execute(
+      {},
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(workbenches.ok).toBe(true);
+    if (workbenches.ok) {
+      expect(workbenches.data.workbenches[0]?.name).toBe("Machine");
+    }
+
+    const projects = await projectsTool!.execute(
+      { type: "sysManager" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(projects.ok).toBe(true);
+    if (projects.ok) {
+      expect(projects.data.projects[0]?.type).toBe("sysManager");
+    }
+
+    const projectState = await projectStateTool!.execute(
+      { project: "Machine" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(projectState.ok).toBe(true);
+    if (projectState.ok) {
+      expect(projectState.data.projects[0]?.activeConnection.available).toBe(
+        false,
+      );
     }
   });
 

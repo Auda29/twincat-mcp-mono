@@ -421,6 +421,76 @@ function createRuntimeStub(
         runtimeErrors: await runtime.tcRuntimeErrorList(),
       };
     },
+    tcListWorkbenches: () => ({
+      backendCapabilities: [
+        {
+          backend: "configuredProjectFiles" as const,
+          available: true,
+          capabilities: {
+            runtimeOnly: false,
+            engineeringRead: true,
+            engineeringWrite: false,
+          },
+        },
+      ],
+      workbenches: [
+        {
+          id: "configured-project-files",
+          name: "Machine",
+          backend: "configuredProjectFiles" as const,
+          available: true,
+          capabilities: {
+            runtimeOnly: false,
+            engineeringRead: true,
+            engineeringWrite: false,
+          },
+          projectCount: 1,
+        },
+      ],
+      count: 1,
+    }),
+    tcListProjects: () => ({
+      backendCapabilities: [],
+      projects: [
+        {
+          id: "configuredProjectFiles:c:/machine/machine.tsproj",
+          name: "Machine",
+          path: "C:/Machine/Machine.tsproj",
+          type: "sysManager" as const,
+          exists: true,
+          source: "configuredProjectFiles" as const,
+          workbenchId: "configured-project-files",
+        },
+      ],
+      count: 1,
+    }),
+    tcProjectState: () => ({
+      backendCapabilities: [],
+      projects: [
+        {
+          project: {
+            id: "configuredProjectFiles:c:/machine/machine.tsproj",
+            name: "Machine",
+            path: "C:/Machine/Machine.tsproj",
+            type: "sysManager" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+          backend: "configuredProjectFiles" as const,
+          capabilities: {
+            runtimeOnly: false,
+            engineeringRead: true,
+            engineeringWrite: false,
+          },
+          activeConnection: {
+            available: false,
+            source: "none" as const,
+          },
+        },
+      ],
+      count: 1,
+    }),
     writeSymbol: async ({ name, value }: { name: string; value: unknown }) => ({
       name,
       value,
@@ -549,6 +619,9 @@ describe("mcp tool definitions", () => {
       "tc_log_read",
       "tc_diagnose_errors",
       "tc_diagnose_runtime",
+      "tc_list_workbenches",
+      "tc_list_projects",
+      "tc_project_state",
       "plc_write",
       "plc_watch",
       "plc_wait_until",
@@ -749,6 +822,35 @@ describe("mcp tool definitions", () => {
         configuredIoDataPoints: 1,
         runtimeErrorCount: 1,
       },
+    });
+
+    const workbenches = await callMcpTool(tools, "tc_list_workbenches", {});
+    expect(workbenches.isError).toBeUndefined();
+    expect(workbenches.structuredContent).toMatchObject({
+      workbenches: [{ name: "Machine" }],
+      count: 1,
+    });
+
+    const projects = await callMcpTool(tools, "tc_list_projects", {
+      type: "sysManager",
+    });
+    expect(projects.isError).toBeUndefined();
+    expect(projects.structuredContent).toMatchObject({
+      projects: [{ name: "Machine", type: "sysManager" }],
+      count: 1,
+    });
+
+    const projectState = await callMcpTool(tools, "tc_project_state", {
+      project: "Machine",
+    });
+    expect(projectState.isError).toBeUndefined();
+    expect(projectState.structuredContent).toMatchObject({
+      projects: [
+        {
+          project: { name: "Machine" },
+          activeConnection: { available: false },
+        },
+      ],
     });
   });
 });

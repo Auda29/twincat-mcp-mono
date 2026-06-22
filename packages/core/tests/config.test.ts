@@ -30,6 +30,11 @@ describe("core config contract", () => {
       logName: "Application",
       commandTimeoutMs: 15000,
     });
+    expect(config.engineering).toEqual({
+      enabled: false,
+      backend: "configuredProjectFiles",
+      projectFiles: [],
+    });
     expect(config.readOnly).toBe(true);
   });
 
@@ -89,6 +94,16 @@ describe("core config contract", () => {
           },
         ],
       },
+      engineering: {
+        enabled: true,
+        workbenchName: "Local XAE",
+        projectFiles: [
+          {
+            path: "C:/TwinCAT/Sample/Sample.sln",
+            type: "solution",
+          },
+        ],
+      },
     });
 
     expect(config.targetAdsPort).toBe(852);
@@ -130,6 +145,17 @@ describe("core config contract", () => {
     expect(config.diagnostics.logSources[0]).toMatchObject({
       id: "runtime-file",
       kind: "file",
+    });
+    expect(config.engineering).toEqual({
+      enabled: true,
+      backend: "configuredProjectFiles",
+      workbenchName: "Local XAE",
+      projectFiles: [
+        {
+          path: "C:/TwinCAT/Sample/Sample.sln",
+          type: "solution",
+        },
+      ],
     });
   });
 

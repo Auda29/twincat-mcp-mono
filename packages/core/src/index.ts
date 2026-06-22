@@ -23,6 +23,7 @@ export {
   adsDirectConnectionConfigSchema,
   adsRouterConnectionConfigSchema,
   extensionConfigSchema,
+  engineeringConfigSchema,
   isWriteAllowed,
   normalizeExtensionConfig,
   normalizeRuntimeDiagnosticsConfig,
@@ -35,6 +36,10 @@ export {
   type AdsRouterConnectionConfig,
   type ExtensionConfigInput,
   type ExtensionRuntimeConfig,
+  type EngineeringBackendConfig,
+  type EngineeringConfig,
+  type EngineeringProjectFileConfig,
+  type EngineeringProjectTypeConfig,
   type FileDiagnosticLogSourceConfig,
   type IoAdsNamedServiceConfig,
   type IoDataPointConfig,
@@ -52,6 +57,21 @@ export {
   type WindowsEventLogDiagnosticSourceConfig,
   type WritePolicy,
 } from "./config.js";
+
+export {
+  EngineeringService,
+  type EngineeringBackendCapability,
+  type EngineeringBackendSource,
+  type EngineeringCapabilityFlags,
+  type EngineeringListProjectsInput,
+  type EngineeringListProjectsResult,
+  type EngineeringListWorkbenchesResult,
+  type EngineeringProjectState,
+  type EngineeringProjectStateInput,
+  type EngineeringProjectStateResult,
+  type EngineeringProjectSummary,
+  type EngineeringWorkbenchSummary,
+} from "./engineering.js";
 
 export {
   ADS,
@@ -150,6 +170,8 @@ export {
   type TcDiagnoseErrorsInput,
   type TcDiagnoseRuntimeInput,
   type TcEventListInput,
+  type TcListProjectsInput,
+  type TcProjectStateInput,
   type TcLogReadInput,
   type TcRuntimeErrorListInput,
   type TwinCatAdsOperations,

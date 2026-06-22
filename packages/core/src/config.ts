@@ -98,6 +98,48 @@ const diagnosticCommandTimeoutSchema = z
   .max(60_000, "Diagnostic command timeout must be 60000 ms or lower.")
   .default(DEFAULT_DIAGNOSTIC_COMMAND_TIMEOUT_MS);
 
+const engineeringBackendSchema = z.enum([
+  "configuredProjectFiles",
+  "automationInterface",
+  "dte",
+  "tcXaeShell",
+  "gasWebSocket",
+]);
+
+const engineeringProjectTypeSchema = z.enum([
+  "solution",
+  "sysManager",
+  "plc",
+  "hmi",
+  "unknown",
+]);
+
+const engineeringProjectFileSchema = z
+  .object({
+    path: z
+      .string()
+      .trim()
+      .min(1, "Engineering project file path must not be empty.")
+      .transform((value) => value.trim()),
+    name: z.string().trim().min(1).optional(),
+    type: engineeringProjectTypeSchema.optional(),
+  })
+  .strict();
+
+export const engineeringConfigSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    backend: engineeringBackendSchema.default("configuredProjectFiles"),
+    workbenchName: z.string().trim().min(1).optional(),
+    projectFiles: z.array(engineeringProjectFileSchema).default([]),
+  })
+  .strict()
+  .default({
+    enabled: false,
+    backend: "configuredProjectFiles",
+    projectFiles: [],
+  });
+
 const plcSymbolGroupsSchema = z
   .record(
     z
@@ -298,6 +340,7 @@ const commonConfigSchema = z.object({
     .default(DEFAULT_MAX_WAIT_UNTIL_MS),
   services: adsServicesConfigSchema,
   diagnostics: runtimeDiagnosticsConfigSchema,
+  engineering: engineeringConfigSchema,
 });
 
 export const adsRouterConnectionConfigSchema = commonConfigSchema.extend({
@@ -389,6 +432,29 @@ export interface RuntimeDiagnosticsConfig {
   readonly maxLogBytes: number;
   readonly eventSources: RuntimeEventSourceConfig[];
   readonly logSources: RuntimeLogSourceConfig[];
+}
+export type EngineeringBackendConfig =
+  | "configuredProjectFiles"
+  | "automationInterface"
+  | "dte"
+  | "tcXaeShell"
+  | "gasWebSocket";
+export type EngineeringProjectTypeConfig =
+  | "solution"
+  | "sysManager"
+  | "plc"
+  | "hmi"
+  | "unknown";
+export interface EngineeringProjectFileConfig {
+  readonly path: string;
+  readonly name?: string | undefined;
+  readonly type?: EngineeringProjectTypeConfig | undefined;
+}
+export interface EngineeringConfig {
+  readonly enabled: boolean;
+  readonly backend: EngineeringBackendConfig;
+  readonly workbenchName?: string | undefined;
+  readonly projectFiles: EngineeringProjectFileConfig[];
 }
 
 export type AdsConnectionMode = z.infer<

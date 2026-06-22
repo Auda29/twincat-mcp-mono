@@ -41,16 +41,16 @@ Fehlerbilder andere sind.
 - Dokumentieren, dass der MCP-Server Tools bereitstellt, waehrend Skills agentenseitig Arbeitsweise, Sprache und Sicherheitsregeln steuern.
 - Packaging so gestalten, dass shared Skills zwischen Pi und MCP konsistent bleiben.
 
-### 20. Engineering-Backend und Projektkontext evaluieren `[Open]`
+### 20. Engineering-Backend und Projektkontext evaluieren `[Done]`
 
 - Verfuegbare Backends fuer XAE-/Visual-Studio-Projektzugriff evaluieren:
   Automation Interface, DTE/VS-Integration, TcXaeShell-Kontext, GAS/WebSocket
-  oder explizit konfigurierte Projektdateien.
-- Read-only-Prototyp fuer Workbench-/Projekt-Erkennung bauen.
-- `tc_list_workbenches` pruefen, falls ein Live-XAE-Kontext verfuegbar ist.
-- `tc_list_projects` implementieren oder prototypisieren, um SysManager-, PLC- und HMI-Projekte sichtbar zu machen.
-- `tc_project_state` definieren, um Projektdatei, Projekttyp, aktive Verbindung und Backend-Quelle kompakt auszugeben.
-- Backend-Faehigkeiten explizit melden, z. B. `runtimeOnly`, `engineeringRead`, `engineeringWrite`.
+  oder explizit konfigurierte Projektdateien. `[Done: docs/engineering-backends.md]`
+- Read-only-Prototyp fuer Workbench-/Projekt-Erkennung bauen. `[Done: configured project-file backend]`
+- `tc_list_workbenches` pruefen, falls ein Live-XAE-Kontext verfuegbar ist. `[Done: live backends werden als unavailable capabilities gemeldet]`
+- `tc_list_projects` implementieren oder prototypisieren, um SysManager-, PLC- und HMI-Projekte sichtbar zu machen. `[Done]`
+- `tc_project_state` definieren, um Projektdatei, Projekttyp, aktive Verbindung und Backend-Quelle kompakt auszugeben. `[Done]`
+- Backend-Faehigkeiten explizit melden, z. B. `runtimeOnly`, `engineeringRead`, `engineeringWrite`. `[Done]`
 
 ### 21. SysManager-Tree und I/O-Topologie als Engineering-Kontext lesen `[Open]`
 

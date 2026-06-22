@@ -1,4 +1,4 @@
-import type { TwinCatAdsRuntimeConfig } from "./config.js";
+import type { EngineeringProjectTypeConfig, TwinCatAdsRuntimeConfig } from "./config.js";
 import type {
   AdsConnectionInfo,
   IoListGroupsResult,
@@ -40,6 +40,12 @@ import type {
   RuntimeLogQuery,
   RuntimeLogReadResult,
 } from "./diagnostics.js";
+import {
+  EngineeringService,
+  type EngineeringListProjectsResult,
+  type EngineeringListWorkbenchesResult,
+  type EngineeringProjectStateResult,
+} from "./engineering.js";
 
 export interface ReadSymbolInput {
   readonly name: string;
@@ -87,6 +93,15 @@ export interface TcDiagnoseErrorsInput extends TwinCatDiagnoseErrorsServiceInput
 
 export interface TcDiagnoseRuntimeInput
   extends TwinCatDiagnoseRuntimeServiceInput {}
+
+export interface TcListProjectsInput {
+  readonly workbenchId?: string | undefined;
+  readonly type?: EngineeringProjectTypeConfig | undefined;
+}
+
+export interface TcProjectStateInput {
+  readonly project?: string | undefined;
+}
 
 export interface WriteSymbolInput<T = unknown> {
   readonly name: string;
@@ -144,6 +159,9 @@ export interface TwinCatAdsOperations {
   tcDiagnoseRuntime(
     input?: TcDiagnoseRuntimeInput,
   ): Promise<TwinCatDiagnoseRuntimeResult>;
+  tcListWorkbenches(): EngineeringListWorkbenchesResult;
+  tcListProjects(input?: TcListProjectsInput): EngineeringListProjectsResult;
+  tcProjectState(input?: TcProjectStateInput): EngineeringProjectStateResult;
   writeSymbol<T = unknown>(
     input: WriteSymbolInput<T>,
   ): Promise<PlcWriteResult<T>>;
@@ -159,19 +177,31 @@ export interface TwinCatAdsOperations {
 
 export interface TwinCatAdsRuntime extends TwinCatAdsOperations {
   readonly service: TwinCatAdsService;
+  readonly engineering: EngineeringService;
   readonly config?: TwinCatAdsRuntimeConfig;
 }
 
 export interface CreateTwinCatAdsRuntimeOptions {
   readonly config?: TwinCatAdsRuntimeConfig;
+  readonly engineering?: EngineeringService;
 }
 
 export function createTwinCatAdsRuntime(
   service: TwinCatAdsService,
   options: CreateTwinCatAdsRuntimeOptions = {},
 ): TwinCatAdsRuntime {
+  const engineering =
+    options.engineering ??
+    new EngineeringService(
+      options.config?.engineering ?? {
+        enabled: false,
+        backend: "configuredProjectFiles",
+        projectFiles: [],
+      },
+    );
   const runtime: TwinCatAdsRuntime = {
     service,
+    engineering,
     connect: async () => service.connect(),
     disconnect: async () => service.disconnect(),
     listSymbols: async (input = {}) => service.listSymbols(input.filter),
@@ -198,6 +228,9 @@ export function createTwinCatAdsRuntime(
     tcLogRead: async (input = {}) => service.tcLogRead(input),
     tcDiagnoseErrors: async (input = {}) => service.tcDiagnoseErrors(input),
     tcDiagnoseRuntime: async (input = {}) => service.tcDiagnoseRuntime(input),
+    tcListWorkbenches: () => engineering.listWorkbenches(),
+    tcListProjects: (input = {}) => engineering.listProjects(input),
+    tcProjectState: (input = {}) => engineering.projectState(input),
     writeSymbol: async (input) => service.writeSymbol(input.name, input.value),
     waitUntil: async (input) => service.waitUntil(input),
     watchSymbol: async (input) => {

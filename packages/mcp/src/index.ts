@@ -19,6 +19,7 @@ import {
   createTwinCatAdsRuntime,
   normalizeTwinCatAdsConfig,
   type AdsServiceDependencies,
+  type EngineeringProjectTypeConfig,
   type TwinCatAdsConfigInput,
   type TwinCatAdsRuntime,
 } from "twincat-mcp-core";
@@ -81,6 +82,13 @@ const symbolNameSchema = z
   .min(1, "Symbol name must not be empty.");
 
 const emptyInputSchema = z.object({}).strict();
+const engineeringProjectTypeSchema = z.enum([
+  "solution",
+  "sysManager",
+  "plc",
+  "hmi",
+  "unknown",
+]);
 const listSymbolsInputSchema = z
   .object({
     filter: z.string().trim().min(1).optional(),
@@ -258,6 +266,17 @@ const tcDiagnoseRuntimeInputSchema = z
     since: diagnosticDateTimeSchema.optional(),
     until: diagnosticDateTimeSchema.optional(),
     contains: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const tcListProjectsInputSchema = z
+  .object({
+    workbenchId: z.string().trim().min(1).optional(),
+    type: engineeringProjectTypeSchema.optional(),
+  })
+  .strict();
+const tcProjectStateInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
   })
   .strict();
 const writeInputSchema = z
@@ -728,6 +747,53 @@ export function createMcpToolDefinitions(
       annotations: { readOnlyHint: true, openWorldHint: true },
       execute: async (input: z.infer<typeof tcDiagnoseRuntimeInputSchema>) =>
         runtime.tcDiagnoseRuntime(input),
+    },
+    {
+      name: "tc_list_workbenches",
+      title: "TwinCAT Engineering Workbenches",
+      description:
+        "List configured TwinCAT engineering workbenches and backend capabilities.",
+      inputSchema: emptyInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: () => runtime.tcListWorkbenches(),
+    },
+    {
+      name: "tc_list_projects",
+      title: "TwinCAT Engineering Projects",
+      description:
+        "List read-only TwinCAT engineering projects from configured project files.",
+      inputSchema: tcListProjectsInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (
+        input: z.infer<typeof tcListProjectsInputSchema>,
+      ) => {
+        const projectInput: {
+          workbenchId?: string;
+          type?: EngineeringProjectTypeConfig;
+        } = {};
+
+        if (input.workbenchId !== undefined) {
+          projectInput.workbenchId = input.workbenchId;
+        }
+
+        if (input.type !== undefined) {
+          projectInput.type = input.type;
+        }
+
+        return runtime.tcListProjects(projectInput);
+      },
+    },
+    {
+      name: "tc_project_state",
+      title: "TwinCAT Engineering Project State",
+      description:
+        "Describe read-only TwinCAT engineering project files, type, backend source, and live-connection availability.",
+      inputSchema: tcProjectStateInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcProjectStateInputSchema>) =>
+        runtime.tcProjectState(
+          input.project === undefined ? {} : { project: input.project },
+        ),
     },
     {
       name: "plc_write",
