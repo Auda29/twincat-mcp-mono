@@ -8,19 +8,29 @@ description: >-
   nc_read_axis_many, nc_read_error, io_list_groups, io_read, io_read_many,
   io_read_group, tc_state, tc_event_list,
   tc_runtime_error_list, tc_log_read, tc_diagnose_errors,
-  tc_diagnose_runtime). Use when inspecting TwinCAT PLC symbols, NC axis state,
-  IO data points, runtime state, runtime diagnostics, configured groups, or ADS
-  watches over a configured ADS connection.
+  tc_diagnose_runtime, tc_list_workbenches, tc_list_projects,
+  tc_project_state, tc_build_project, plc_build_project,
+  tc_build_and_get_errors, tc_error_list, tc_error_context, tc_output_read,
+  tc_resource_read, hmi_state, hmi_list_projects, hmi_preview_info,
+  hmi_list_controls, tc_tree_read, tc_tree_search, tc_tree_describe_item,
+  io_list_topology, io_describe_device, io_describe_terminal, plc_list_pous,
+  plc_read_pou, plc_search_code, plc_describe_pou, plc_list_libraries,
+  plc_describe_library). Use when inspecting TwinCAT PLC symbols, NC axis state,
+  IO data points, runtime state, runtime diagnostics, configured groups, ADS
+  watches, or read-only TwinCAT engineering project context.
 ---
 
 # TwinCAT ADS Skill
 
-Use this skill when the agent needs to inspect TwinCAT PLC, NC, or IO runtime values over ADS, or safely manipulate explicitly allowed PLC symbols.
+Use this skill when the agent needs to inspect TwinCAT PLC, NC, or IO runtime
+values over ADS, safely manipulate explicitly allowed PLC symbols, or inspect
+the package's read-only TwinCAT engineering project context.
 
-For offline TwinCAT XAE or Visual Studio project-file work, use the
-`twincat-xae-project-guidelines` skill instead. Keep runtime ADS reads,
-watches, waits, and explicitly allowed PLC writes separate from project-tree,
-POU, GVL, DUT, task, I/O topology, build, and XAE editing work.
+For offline TwinCAT XAE or Visual Studio project-file edits, reviews, or
+user-facing XAE terminology, also use the `twincat-xae-project-guidelines`
+skill. Keep runtime ADS reads, watches, waits, and explicitly allowed PLC writes
+separate from read-only engineering context and from any project-file editing
+work.
 
 ## Recommended workflow
 
@@ -31,12 +41,13 @@ POU, GVL, DUT, task, I/O topology, build, and XAE editing work.
 5. Use `nc_state`, `nc_list_axes`, `nc_read_axis_position`, `nc_read_axis_status`, `nc_read_axis`, or `nc_read_error` when the task concerns NC axes, motion state, position, velocity, status flags, or NC errors.
 6. Use `io_list_groups`, `io_read`, `io_read_many`, or `io_read_group` when the task concerns configured IO process data, sensors, valves, safety inputs, or outputs.
 7. Use `tc_state`, `tc_event_list`, `tc_runtime_error_list`, or `tc_log_read` when the task concerns a specific TwinCAT-wide runtime diagnostic surface rather than one PLC symbol, NC axis, or IO data point.
-8. Use `tc_diagnose_errors` or `tc_diagnose_runtime` for bounded first-pass triage when the user asks for a compact error or runtime health overview.
-9. Use `plc_read` or `plc_read_many` before making decisions.
-10. Use `plc_wait_until` for a specific PLC state transition or condition; use `plc_watch` for ongoing PLC observation.
-11. Only use `plc_write` after checking state, symbol path, and write permissions.
-12. Use `plc_list_watches` to inspect current subscriptions and avoid duplicates.
-13. Pay attention to hook-provided `failedSnapshots` if configured context symbols could not be read.
+8. Use `tc_diagnose_errors` or `tc_diagnose_runtime` for bounded first-pass triage when the user asks for a compact runtime error or health overview.
+9. Use the read-only Engineering tools when the task is about configured XAE projects, project files, build/error context, SysManager/I/O topology, PLC code objects, or HMI project context.
+10. Use `plc_read` or `plc_read_many` before making decisions about live PLC state.
+11. Use `plc_wait_until` for a specific PLC state transition or condition; use `plc_watch` for ongoing PLC observation.
+12. Only use `plc_write` after checking state, symbol path, and write permissions.
+13. Use `plc_list_watches` to inspect current subscriptions and avoid duplicates.
+14. Pay attention to hook-provided `failedSnapshots` if configured context symbols could not be read.
 
 ## Tool guidance
 
@@ -157,11 +168,43 @@ POU, GVL, DUT, task, I/O topology, build, and XAE editing work.
 - Diagnostic sources are configured under `diagnostics.eventSources` and `diagnostics.logSources`.
 - The default local source uses the Windows `Application` Event Log filtered for TwinCAT/Beckhoff provider names when available.
 - If a diagnostic result has `available=false`, report the capability reason instead of treating it as a PLC failure.
-- Do not use these runtime diagnostic tools for XAE build output, Engineering error lists, or Visual Studio output windows; those belong to the later Engineering phase.
+- Do not use these runtime diagnostic tools for XAE build output, Engineering
+  error lists, or Visual Studio output windows; use the read-only Engineering
+  tools below for that context.
+
+### TwinCAT Engineering context
+
+- Engineering tools are read-only project-context tools. They do not activate
+  configuration, download, login, start, stop, force values, scan hardware, or
+  edit project files.
+- Use `tc_list_workbenches`, `tc_list_projects`, and `tc_project_state` to orient
+  around configured TwinCAT workbenches and project files before reading deeper
+  project context.
+- Use `tc_build_project`, `plc_build_project`, and `tc_build_and_get_errors` for
+  bounded build requests. The configured project-file backend reports build
+  calls as unavailable when no live XAE/Visual Studio backend exists; report that
+  capability reason instead of treating it as a failed controller build.
+- Use `tc_error_list`, `tc_error_context`, and `tc_output_read` for Engineering
+  compiler/parser issues, source context, and bounded build or Engineering
+  output. Keep limits narrow.
+- Use `tc_resource_read` to dereference returned resource URIs such as `plcc://`,
+  `err://`, `io://`, `tcfile://`, and `tcfolder://` instead of asking tools for
+  large dumps.
+- Use `tc_tree_read`, `tc_tree_search`, `tc_tree_describe_item`,
+  `io_list_topology`, `io_describe_device`, and `io_describe_terminal` for
+  SysManager and I/O topology. These tools describe configured project files;
+  they do not scan or reconfigure live hardware.
+- Use `plc_list_pous`, `plc_read_pou`, `plc_search_code`,
+  `plc_describe_pou`, `plc_list_libraries`, and `plc_describe_library` for PLC
+  code, POU/GVL/DUT/interface summaries, source snippets, and referenced
+  libraries.
+- Use `hmi_state`, `hmi_list_projects`, `hmi_preview_info`, and
+  `hmi_list_controls` for exploratory read-only HMI project context. Do not
+  create, edit, publish, or preview-control HMI artifacts through this layer.
 - When the user asks to edit or review TwinCAT project files, POUs, GVLs, DUTs,
-  tasks, I/O devices, boxes, or terminals, switch to
+  tasks, I/O devices, boxes, terminals, or HMI files, also use
   `twincat-xae-project-guidelines` for the project-file workflow and use ADS
-  tools only for separate runtime observations.
+  runtime tools only for separate runtime observations.
 
 ### Finding symbol paths
 

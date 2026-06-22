@@ -10,6 +10,9 @@ These are acceptable when they are clearly part of the requested project-file
 task:
 
 - Read project files, XML, and source code from the workspace.
+- Use read-only Engineering context tools such as project lists, tree reads,
+  PLC code reads/searches, resource reads, HMI context, and Engineering
+  error/output reads.
 - Edit offline source project files in the workspace.
 - Run local static checks that do not connect to or change a target.
 - Run a local build or compile only when the user's request calls for validation

@@ -9,7 +9,7 @@ historischer Kontext erhalten.
 
 ## Phase 4: Skill-Aktualisierung fuer Engineering-Tools
 
-### 26. Mitgelieferte Skills auf `0.5.0` Engineering-Tooling aktualisieren `[Open]`
+### 26. Mitgelieferte Skills auf `0.5.0` Engineering-Tooling aktualisieren `[Done]`
 
 - Pi-Skill `packages/pi/skills/twincat-ads/SKILL.md` um die seit `0.5.0`
   ausgelieferten read-only Engineering-Tools ergaenzen.

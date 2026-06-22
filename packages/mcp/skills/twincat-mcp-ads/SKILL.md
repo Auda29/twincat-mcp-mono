@@ -9,19 +9,27 @@ description: >-
   nc_list_axes, nc_read_axis_position, nc_read_axis_status, nc_read_axis,
   nc_read_axis_many, nc_read_error, io_list_groups, io_read, io_read_many,
   io_read_group, tc_state, tc_event_list, tc_runtime_error_list, tc_log_read,
-  tc_diagnose_errors, or tc_diagnose_runtime.
+  tc_diagnose_errors, tc_diagnose_runtime, tc_list_workbenches,
+  tc_list_projects, tc_project_state, tc_build_project, plc_build_project,
+  tc_build_and_get_errors, tc_error_list, tc_error_context, tc_output_read,
+  tc_resource_read, hmi_state, hmi_list_projects, hmi_preview_info,
+  hmi_list_controls, tc_tree_read, tc_tree_search, tc_tree_describe_item,
+  io_list_topology, io_describe_device, io_describe_terminal, plc_list_pous,
+  plc_read_pou, plc_search_code, plc_describe_pou, plc_list_libraries, or
+  plc_describe_library.
 ---
 
 # TwinCAT MCP ADS Skill
 
 Use this skill when the MCP server exposes TwinCAT runtime values, diagnostics,
-watches, waits, or explicitly gated PLC writes over ADS. The MCP server provides
-tools; this skill only guides agent-side tool selection, wording, and safety.
+watches, waits, explicitly gated PLC writes over ADS, or read-only TwinCAT
+engineering project context. The MCP server provides tools; this skill only
+guides agent-side tool selection, wording, and safety.
 
-For offline TwinCAT XAE or Visual Studio project-file work, use
-`twincat-xae-project-guidelines` instead. Keep runtime ADS observations separate
-from project-tree, POU, GVL, DUT, task, I/O topology, build, and XAE editing
-work.
+For offline TwinCAT XAE or Visual Studio project-file edits, reviews, or
+user-facing XAE terminology, also use `twincat-xae-project-guidelines`. Keep
+runtime ADS observations separate from read-only engineering context and from
+any project-file editing work.
 
 ## Recommended Workflow
 
@@ -39,21 +47,24 @@ work.
 7. Use `tc_state`, `tc_event_list`, `tc_runtime_error_list`, `tc_log_read`,
    `tc_diagnose_errors`, or `tc_diagnose_runtime` for TwinCAT runtime
    diagnostics.
-8. Use `plc_wait_until` for a bounded condition wait and `plc_watch` for ongoing
+8. Use the read-only Engineering tools when the task is about configured XAE
+   projects, project files, build/error context, SysManager/I/O topology, PLC
+   code objects, or HMI project context.
+9. Use `plc_wait_until` for a bounded condition wait and `plc_watch` for ongoing
    observation. Use `plc_list_watches` before creating duplicate watches.
-9. For writes, call `plc_evaluate_write_access` first when there is any doubt.
+10. For writes, call `plc_evaluate_write_access` first when there is any doubt.
    Only use `plc_write` after checking runtime state, exact symbol path, and all
    write gates.
-10. Use `ads_disconnect` when a session explicitly needs to close the ADS
-    connection.
+11. Use `ads_disconnect` when a session explicitly needs to close the ADS
+   connection.
 
 ## Runtime Scope
 
-- These MCP tools inspect live TwinCAT runtime state over ADS.
-- They do not read or edit XAE project trees, Visual Studio documents, PLC
-  project XML, source POUs, GVLs, DUTs, or engineering build output.
-- If a user asks about files, project structure, POUs, tasks, I/O devices,
-  boxes, terminals, or XAE tree items, switch to
+- Runtime MCP tools inspect live TwinCAT runtime state over ADS.
+- Read-only Engineering MCP tools inspect configured XAE project context without
+  editing project files or performing online target actions.
+- If a user asks to edit files, project structure, POUs, tasks, I/O devices,
+  boxes, terminals, HMI files, or XAE tree items, also use
   `twincat-xae-project-guidelines`.
 
 ## PLC Reads
@@ -103,7 +114,33 @@ work.
 - If a diagnostic source reports `available=false`, report that capability
   reason instead of treating it as a PLC or ADS failure.
 - Do not use runtime diagnostics for XAE build output, Engineering error lists,
-  or Visual Studio output windows.
+  or Visual Studio output windows; use the read-only Engineering tools for that
+  context.
+
+## Engineering Context
+
+- Use `tc_list_workbenches`, `tc_list_projects`, and `tc_project_state` to orient
+  around configured TwinCAT workbenches and project files.
+- Use `tc_build_project`, `plc_build_project`, and `tc_build_and_get_errors` for
+  bounded build requests. The configured project-file backend reports build
+  calls as unavailable when no live XAE/Visual Studio backend exists; report the
+  capability reason.
+- Use `tc_error_list`, `tc_error_context`, and `tc_output_read` for Engineering
+  compiler/parser issues, source context, and bounded build or Engineering
+  output.
+- Use `tc_resource_read` to dereference returned resource URIs such as `plcc://`,
+  `err://`, `io://`, `tcfile://`, and `tcfolder://`.
+- Use `tc_tree_read`, `tc_tree_search`, `tc_tree_describe_item`,
+  `io_list_topology`, `io_describe_device`, and `io_describe_terminal` for
+  SysManager and I/O topology. These tools do not scan or reconfigure live
+  hardware.
+- Use `plc_list_pous`, `plc_read_pou`, `plc_search_code`,
+  `plc_describe_pou`, `plc_list_libraries`, and `plc_describe_library` for PLC
+  code, POU/GVL/DUT/interface summaries, source snippets, and referenced
+  libraries.
+- Use `hmi_state`, `hmi_list_projects`, `hmi_preview_info`, and
+  `hmi_list_controls` for exploratory read-only HMI project context. Do not
+  create, edit, publish, or preview-control HMI artifacts through this layer.
 
 ## Writes
 
