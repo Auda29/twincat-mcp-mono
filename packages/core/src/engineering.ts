@@ -296,6 +296,83 @@ export interface EngineeringPlcDescribeLibraryResult {
   readonly library: EngineeringPlcLibrarySummary;
 }
 
+export type EngineeringHmiArtifactKind =
+  | "view"
+  | "control"
+  | "userControl"
+  | "content"
+  | "unknown";
+
+export interface EngineeringHmiProjectSummary {
+  readonly project: EngineeringProjectSummary;
+  readonly artifactCount: number;
+  readonly routerPort?: number | undefined;
+  readonly serverPort?: number | undefined;
+  readonly previewAvailable: boolean;
+  readonly previewReason?: string | undefined;
+}
+
+export interface EngineeringHmiArtifactSummary {
+  readonly id: string;
+  readonly resourceUri: string;
+  readonly name: string;
+  readonly kind: EngineeringHmiArtifactKind;
+  readonly path: string;
+  readonly sourceFile: string;
+  readonly project: EngineeringProjectSummary;
+}
+
+export interface EngineeringHmiStateInput {
+  readonly project?: string | undefined;
+}
+
+export interface EngineeringHmiStateResult {
+  readonly backendCapabilities: EngineeringBackendCapability[];
+  readonly projects: EngineeringHmiProjectSummary[];
+  readonly count: number;
+  readonly activeConnection: {
+    readonly available: boolean;
+    readonly source: "none" | "configuredProjectFiles";
+    readonly reason?: string | undefined;
+  };
+}
+
+export interface EngineeringHmiListProjectsInput {
+  readonly project?: string | undefined;
+}
+
+export interface EngineeringHmiListProjectsResult {
+  readonly projects: EngineeringHmiProjectSummary[];
+  readonly count: number;
+}
+
+export interface EngineeringHmiPreviewInfoInput {
+  readonly project?: string | undefined;
+}
+
+export interface EngineeringHmiPreviewInfoResult {
+  readonly available: boolean;
+  readonly project?: EngineeringProjectSummary | undefined;
+  readonly routerPort?: number | undefined;
+  readonly serverPort?: number | undefined;
+  readonly url?: string | undefined;
+  readonly reason?: string | undefined;
+}
+
+export interface EngineeringHmiListControlsInput {
+  readonly project?: string | undefined;
+  readonly kind?: EngineeringHmiArtifactKind | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface EngineeringHmiListControlsResult {
+  readonly controls: EngineeringHmiArtifactSummary[];
+  readonly count: number;
+  readonly truncated: boolean;
+  readonly available: boolean;
+  readonly reason?: string | undefined;
+}
+
 export type EngineeringBuildScope = "twinCatProject" | "plcProject";
 export type EngineeringBuildStatus =
   | "succeeded"
@@ -492,9 +569,18 @@ const XML_REFERENCE_EXTENSIONS = new Set([
   ".xtp",
 ]);
 const PLC_OBJECT_EXTENSIONS = new Set([".tcpou", ".tcgvl", ".tcdut", ".tcio"]);
+const HMI_ARTIFACT_EXTENSIONS = new Set([
+  ".view",
+  ".control",
+  ".usercontrol",
+  ".content",
+  ".html",
+]);
 const DEFAULT_CODE_SEARCH_LIMIT = 50;
 const MAX_CODE_SEARCH_LIMIT = 250;
 const CODE_PREVIEW_LINE_COUNT = 12;
+const DEFAULT_HMI_ARTIFACT_LIMIT = 50;
+const MAX_HMI_ARTIFACT_LIMIT = 250;
 const DEFAULT_ENGINEERING_ISSUE_LIMIT = 50;
 const MAX_ENGINEERING_ISSUE_LIMIT = 250;
 const DEFAULT_ENGINEERING_CONTEXT_LINES = 3;
@@ -933,6 +1019,23 @@ function collectPlcObjectReferences(
   ].sort((left, right) => left.localeCompare(right));
 }
 
+function isHmiArtifactReference(path: string): boolean {
+  return HMI_ARTIFACT_EXTENSIONS.has(extname(path).toLowerCase());
+}
+
+function collectHmiArtifactReferences(
+  projectXml: unknown,
+  projectPath: string,
+): string[] {
+  return [
+    ...collectAttributeReferences(
+      projectXml,
+      dirname(projectPath),
+      isHmiArtifactReference,
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
 function collectTextValues(value: unknown, texts: string[] = []): string[] {
   const scalar = scalarValue(value);
   if (scalar !== undefined) {
@@ -1151,6 +1254,84 @@ function plcObjectName(
   }
 
   return projectName(path);
+}
+
+function classifyHmiArtifact(path: string): EngineeringHmiArtifactKind {
+  switch (extname(path).toLowerCase()) {
+    case ".view":
+      return "view";
+    case ".control":
+      return "control";
+    case ".usercontrol":
+      return "userControl";
+    case ".content":
+    case ".html":
+      return "content";
+    default:
+      return "unknown";
+  }
+}
+
+function artifactName(path: string): string {
+  const extension = extname(path);
+  return extension.length === 0 ? basename(path) : basename(path, extension);
+}
+
+function findNumericSetting(
+  value: unknown,
+  keys: readonly string[],
+): number | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const found = findNumericSetting(entry, keys);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const settings = collectSettings(value);
+  for (const key of keys) {
+    const value = settings[key];
+    if (typeof value === "number" && Number.isInteger(value)) {
+      return value;
+    }
+
+    if (typeof value === "string") {
+      const parsed = Number(value.trim());
+      if (Number.isInteger(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  for (const key of keys) {
+    const scalar = firstChildScalar(value, key);
+    if (scalar !== undefined) {
+      const parsed = Number(scalar.trim());
+      if (Number.isInteger(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  for (const [key, entryValue] of Object.entries(value)) {
+    if (key.startsWith("@")) {
+      continue;
+    }
+
+    const found = findNumericSetting(entryValue, keys);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+
+  return undefined;
 }
 
 interface PlcObjectElementEntry {
@@ -1701,6 +1882,79 @@ export class EngineeringService {
     }
 
     return { library };
+  }
+
+  hmiState(input: EngineeringHmiStateInput = {}): EngineeringHmiStateResult {
+    const projects = this.buildHmiProjectSummaries(input.project);
+    return {
+      backendCapabilities: this.listBackendCapabilities(),
+      projects,
+      count: projects.length,
+      activeConnection: {
+        available: false,
+        source: "none",
+        reason:
+          "The configured project-file backend is read-only and has no live HMI server or XAE connection.",
+      },
+    };
+  }
+
+  hmiListProjects(
+    input: EngineeringHmiListProjectsInput = {},
+  ): EngineeringHmiListProjectsResult {
+    const projects = this.buildHmiProjectSummaries(input.project);
+    return {
+      projects,
+      count: projects.length,
+    };
+  }
+
+  hmiPreviewInfo(
+    input: EngineeringHmiPreviewInfoInput = {},
+  ): EngineeringHmiPreviewInfoResult {
+    const project = this.buildHmiProjectSummaries(input.project)[0];
+    if (project === undefined) {
+      return {
+        available: false,
+        reason: "No configured HMI project was found.",
+      };
+    }
+
+    return {
+      available: false,
+      project: project.project,
+      ...(project.routerPort === undefined ? {} : { routerPort: project.routerPort }),
+      ...(project.serverPort === undefined ? {} : { serverPort: project.serverPort }),
+      reason:
+        project.previewReason ??
+        "No live HMI server information is available from the configured project-file backend.",
+    };
+  }
+
+  hmiListControls(
+    input: EngineeringHmiListControlsInput = {},
+  ): EngineeringHmiListControlsResult {
+    const limit = Math.min(
+      Math.max(input.limit ?? DEFAULT_HMI_ARTIFACT_LIMIT, 1),
+      MAX_HMI_ARTIFACT_LIMIT,
+    );
+    const artifacts = this.buildHmiArtifacts(input.project).filter(
+      (artifact) => input.kind === undefined || artifact.kind === input.kind,
+    );
+    const controls = artifacts.slice(0, limit);
+
+    return {
+      controls,
+      count: controls.length,
+      truncated: artifacts.length > limit,
+      available: controls.length > 0,
+      ...(controls.length > 0
+        ? {}
+        : {
+            reason:
+              "No HMI view/control/content artifact references were found in configured HMI project files.",
+          }),
+    };
   }
 
   tcBuildProject(input: EngineeringBuildInput = {}): EngineeringBuildResult {
@@ -2569,6 +2823,97 @@ export class EngineeringService {
       sourceFile: pou.sourceFile,
       project: pou.project,
     };
+  }
+
+  private buildHmiProjectSummaries(
+    projectFilter?: string,
+  ): EngineeringHmiProjectSummary[] {
+    return this.filterHmiProjects(projectFilter).map((project) => {
+      const metadata = this.readHmiProjectMetadata(project);
+      const previewReason =
+        metadata.serverPort === undefined
+          ? "No live HMI server port or preview URL is available from the configured project file."
+          : "A server port was found in project metadata, but no live HMI preview endpoint is managed by this backend.";
+
+      return {
+        project,
+        artifactCount: this.buildHmiArtifacts(project.id).length,
+        previewAvailable: false,
+        ...(metadata.routerPort === undefined
+          ? {}
+          : { routerPort: metadata.routerPort }),
+        ...(metadata.serverPort === undefined
+          ? {}
+          : { serverPort: metadata.serverPort }),
+        previewReason,
+      };
+    });
+  }
+
+  private readHmiProjectMetadata(project: EngineeringProjectSummary): {
+    readonly routerPort?: number | undefined;
+    readonly serverPort?: number | undefined;
+  } {
+    if (!project.exists) {
+      return {};
+    }
+
+    const parsedProject = xmlParser.parse(readFileSync(project.path, "utf8"));
+    const routerPort = findNumericSetting(parsedProject, [
+      "RouterPort",
+      "AmsRouterPort",
+      "AdsRouterPort",
+    ]);
+    const serverPort = findNumericSetting(parsedProject, [
+      "ServerPort",
+      "WebServerPort",
+      "HttpPort",
+      "HttpsPort",
+      "Port",
+    ]);
+
+    return {
+      ...(routerPort === undefined ? {} : { routerPort }),
+      ...(serverPort === undefined ? {} : { serverPort }),
+    };
+  }
+
+  private buildHmiArtifacts(
+    projectFilter?: string,
+  ): EngineeringHmiArtifactSummary[] {
+    const artifacts: EngineeringHmiArtifactSummary[] = [];
+
+    for (const project of this.filterHmiProjects(projectFilter)) {
+      if (!project.exists) {
+        continue;
+      }
+
+      const parsedProject = xmlParser.parse(readFileSync(project.path, "utf8"));
+      for (const artifactPath of collectHmiArtifactReferences(
+        parsedProject,
+        project.path,
+      )) {
+        artifacts.push({
+          id: `${project.id}:hmi:${artifactPath.toLowerCase()}`,
+          resourceUri: tcFileUri(artifactPath),
+          name: artifactName(artifactPath),
+          kind: classifyHmiArtifact(artifactPath),
+          path: `/${project.name}/${artifactName(artifactPath)}`,
+          sourceFile: artifactPath,
+          project,
+        });
+      }
+    }
+
+    return artifacts.sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+  }
+
+  private filterHmiProjects(projectFilter?: string): EngineeringProjectSummary[] {
+    return this.filterProjects(projectFilter, "hmi").filter(
+      (project) => project.type === "hmi",
+    );
   }
 
   private buildPlcLibraries(

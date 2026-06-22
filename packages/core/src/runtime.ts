@@ -46,6 +46,11 @@ import {
   type EngineeringBuildResult,
   type EngineeringErrorContextResult,
   type EngineeringErrorListResult,
+  type EngineeringHmiArtifactKind,
+  type EngineeringHmiListControlsResult,
+  type EngineeringHmiListProjectsResult,
+  type EngineeringHmiPreviewInfoResult,
+  type EngineeringHmiStateResult,
   type EngineeringListProjectsResult,
   type EngineeringListWorkbenchesResult,
   type EngineeringIoDescribeDeviceResult,
@@ -164,6 +169,24 @@ export interface TcResourceReadInput {
   readonly uri: string;
   readonly limitBytes?: number | undefined;
   readonly contextLines?: number | undefined;
+}
+
+export interface HmiStateInput {
+  readonly project?: string | undefined;
+}
+
+export interface HmiListProjectsInput {
+  readonly project?: string | undefined;
+}
+
+export interface HmiPreviewInfoInput {
+  readonly project?: string | undefined;
+}
+
+export interface HmiListControlsInput {
+  readonly project?: string | undefined;
+  readonly kind?: EngineeringHmiArtifactKind | undefined;
+  readonly limit?: number | undefined;
 }
 
 export interface TcTreeReadInput {
@@ -292,6 +315,12 @@ export interface TwinCatAdsOperations {
   tcErrorContext(input: TcErrorContextInput): EngineeringErrorContextResult;
   tcOutputRead(input?: TcOutputReadInput): EngineeringOutputReadResult;
   tcResourceRead(input: TcResourceReadInput): EngineeringResourceReadResult;
+  hmiState(input?: HmiStateInput): EngineeringHmiStateResult;
+  hmiListProjects(
+    input?: HmiListProjectsInput,
+  ): EngineeringHmiListProjectsResult;
+  hmiPreviewInfo(input?: HmiPreviewInfoInput): EngineeringHmiPreviewInfoResult;
+  hmiListControls(input?: HmiListControlsInput): EngineeringHmiListControlsResult;
   tcTreeRead(input: TcTreeReadInput): EngineeringTreeReadResult;
   tcTreeSearch(input?: TcTreeSearchInput): EngineeringTreeSearchResult;
   tcTreeDescribeItem(
@@ -391,6 +420,10 @@ export function createTwinCatAdsRuntime(
     tcErrorContext: (input) => engineering.tcErrorContext(input),
     tcOutputRead: (input = {}) => engineering.tcOutputRead(input),
     tcResourceRead: (input) => engineering.tcResourceRead(input),
+    hmiState: (input = {}) => engineering.hmiState(input),
+    hmiListProjects: (input = {}) => engineering.hmiListProjects(input),
+    hmiPreviewInfo: (input = {}) => engineering.hmiPreviewInfo(input),
+    hmiListControls: (input = {}) => engineering.hmiListControls(input),
     tcTreeRead: (input) => engineering.treeRead(input),
     tcTreeSearch: (input = {}) => engineering.treeSearch(input),
     tcTreeDescribeItem: (input) => engineering.treeDescribeItem(input),

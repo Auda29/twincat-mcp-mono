@@ -518,4 +518,120 @@ describe("engineering project context", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("explores HMI projects, preview metadata, and referenced artifacts read-only", () => {
+    const root = mkdtempSync(join(tmpdir(), "twincat-engineering-hmi-"));
+    mkdirSync(join(root, "Views"), { recursive: true });
+    mkdirSync(join(root, "Controls"), { recursive: true });
+
+    const projectPath = join(root, "HmiProject.hmiproj");
+    const plcProjectPath = join(root, "PlcProject.plcproj");
+    const viewPath = join(root, "Views", "Main.view");
+    const controlPath = join(root, "Controls", "Valve.control");
+
+    writeFileSync(
+      projectPath,
+      [
+        '<Project Name="HmiProject">',
+        "  <Settings>",
+        "    <RouterPort>48898</RouterPort>",
+        "    <ServerPort>1010</ServerPort>",
+        "  </Settings>",
+        "  <ItemGroup>",
+        '    <View Include="Views\\Main.view" />',
+        '    <Control Include="Controls\\Valve.control" />',
+        "  </ItemGroup>",
+        "</Project>",
+      ].join("\n"),
+    );
+    writeFileSync(
+      plcProjectPath,
+      [
+        '<Project Name="PlcProject">',
+        "  <Settings>",
+        "    <RouterPort>49999</RouterPort>",
+        "    <ServerPort>2020</ServerPort>",
+        "  </Settings>",
+        "  <ItemGroup>",
+        '    <View Include="Views\\Main.view" />',
+        "  </ItemGroup>",
+        "</Project>",
+      ].join("\n"),
+    );
+    writeFileSync(viewPath, "<View Name=\"Main\" />");
+    writeFileSync(controlPath, "<Control Name=\"Valve\" />");
+
+    const engineering = new EngineeringService({
+      enabled: true,
+      backend: "configuredProjectFiles",
+      workbenchName: "Machine",
+      projectFiles: [
+        { path: projectPath, type: "hmi" },
+        { path: plcProjectPath, type: "plc" },
+      ],
+    });
+
+    try {
+      const state = engineering.hmiState();
+      expect(state).toMatchObject({
+        count: 1,
+        activeConnection: { available: false },
+        projects: [
+          {
+            project: { name: "HmiProject", type: "hmi" },
+            routerPort: 48898,
+            serverPort: 1010,
+            artifactCount: 2,
+            previewAvailable: false,
+          },
+        ],
+      });
+
+      const projects = engineering.hmiListProjects();
+      expect(projects.projects[0]?.project.resourceUri).toMatch(/^tcfile:\/\/file\?/);
+
+      const preview = engineering.hmiPreviewInfo({ project: "HmiProject" });
+      expect(preview).toMatchObject({
+        available: false,
+        project: { name: "HmiProject" },
+        routerPort: 48898,
+        serverPort: 1010,
+      });
+
+      const controls = engineering.hmiListControls({ limit: 5 });
+      expect(controls).toMatchObject({
+        available: true,
+        count: 2,
+        truncated: false,
+      });
+      expect(controls.controls.map((entry) => entry.kind).sort()).toEqual([
+        "control",
+        "view",
+      ]);
+      expect(controls.controls[0]?.resourceUri).toMatch(/^tcfile:\/\/file\?/);
+
+      const viewOnly = engineering.hmiListControls({ kind: "view" });
+      expect(viewOnly.controls.map((entry) => entry.name)).toEqual(["Main"]);
+
+      expect(engineering.hmiState({ project: "PlcProject" })).toMatchObject({
+        count: 0,
+        projects: [],
+      });
+      expect(
+        engineering.hmiPreviewInfo({ project: "PlcProject" }),
+      ).toMatchObject({
+        available: false,
+        reason: "No configured HMI project was found.",
+      });
+      expect(
+        engineering.hmiListControls({ project: "PlcProject" }),
+      ).toMatchObject({
+        available: false,
+        count: 0,
+        controls: [],
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

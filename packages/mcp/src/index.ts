@@ -19,6 +19,7 @@ import {
   createTwinCatAdsRuntime,
   normalizeTwinCatAdsConfig,
   type AdsServiceDependencies,
+  type EngineeringHmiArtifactKind,
   type EngineeringProjectTypeConfig,
   type TwinCatAdsConfigInput,
   type TwinCatAdsRuntime,
@@ -114,6 +115,13 @@ const engineeringPlcObjectKindSchema = z.enum([
 ]);
 const engineeringIssueSeveritySchema = z.enum(["error", "warning", "info"]);
 const engineeringOutputChannelSchema = z.enum(["build", "engineering"]);
+const engineeringHmiArtifactKindSchema = z.enum([
+  "view",
+  "control",
+  "userControl",
+  "content",
+  "unknown",
+]);
 const listSymbolsInputSchema = z
   .object({
     filter: z.string().trim().min(1).optional(),
@@ -396,6 +404,23 @@ const tcResourceReadInputSchema = z
       .int()
       .min(0, "Context line count must be 0 or higher.")
       .max(20, "Context line count must be 20 or lower.")
+      .optional(),
+  })
+  .strict();
+const hmiProjectInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const hmiListControlsInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    kind: engineeringHmiArtifactKindSchema.optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "HMI artifact limit must be at least 1.")
+      .max(250, "HMI artifact limit must be 250 or lower.")
       .optional(),
   })
   .strict();
@@ -1058,6 +1083,65 @@ export function createMcpToolDefinitions(
       annotations: { readOnlyHint: true, openWorldHint: false },
       execute: async (input: z.infer<typeof tcResourceReadInputSchema>) =>
         runtime.tcResourceRead(input),
+    },
+    {
+      name: "hmi_state",
+      title: "HMI State",
+      description:
+        "Inspect read-only HMI engineering project state, inferred ports, and preview availability.",
+      inputSchema: hmiProjectInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof hmiProjectInputSchema>) =>
+        runtime.hmiState(input),
+    },
+    {
+      name: "hmi_list_projects",
+      title: "HMI Projects",
+      description:
+        "List configured HMI engineering projects from project files.",
+      inputSchema: hmiProjectInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof hmiProjectInputSchema>) =>
+        runtime.hmiListProjects(input),
+    },
+    {
+      name: "hmi_preview_info",
+      title: "HMI Preview Info",
+      description:
+        "Describe whether a configured HMI project has enough live backend information for preview.",
+      inputSchema: hmiProjectInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof hmiProjectInputSchema>) =>
+        runtime.hmiPreviewInfo(input),
+    },
+    {
+      name: "hmi_list_controls",
+      title: "HMI Controls",
+      description:
+        "List HMI view, control, user-control, and content artifacts referenced by configured HMI project files.",
+      inputSchema: hmiListControlsInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof hmiListControlsInputSchema>) => {
+        const controlsInput: {
+          project?: string;
+          kind?: EngineeringHmiArtifactKind;
+          limit?: number;
+        } = {};
+
+        if (input.project !== undefined) {
+          controlsInput.project = input.project;
+        }
+
+        if (input.kind !== undefined) {
+          controlsInput.kind = input.kind;
+        }
+
+        if (input.limit !== undefined) {
+          controlsInput.limit = input.limit;
+        }
+
+        return runtime.hmiListControls(controlsInput);
+      },
     },
     {
       name: "tc_tree_read",

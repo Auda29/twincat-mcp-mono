@@ -6,6 +6,11 @@ import {
   type EngineeringBuildResult,
   type EngineeringErrorContextResult,
   type EngineeringErrorListResult,
+  type EngineeringHmiArtifactKind,
+  type EngineeringHmiListControlsResult,
+  type EngineeringHmiListProjectsResult,
+  type EngineeringHmiPreviewInfoResult,
+  type EngineeringHmiStateResult,
   type EngineeringListProjectsResult,
   type EngineeringListWorkbenchesResult,
   type EngineeringIoDescribeDeviceResult,
@@ -174,6 +179,13 @@ const engineeringPlcObjectKindSchema = z.enum([
 
 const engineeringIssueSeveritySchema = z.enum(["error", "warning", "info"]);
 const engineeringOutputChannelSchema = z.enum(["build", "engineering"]);
+const engineeringHmiArtifactKindSchema = z.enum([
+  "view",
+  "control",
+  "userControl",
+  "content",
+  "unknown",
+]);
 
 const diagnosticSeveritySchema = z.enum([
   "critical",
@@ -412,6 +424,25 @@ const tcResourceReadInputSchema = z
       .int()
       .min(0, "Context line count must be 0 or higher.")
       .max(20, "Context line count must be 20 or lower.")
+      .optional(),
+  })
+  .strict();
+
+const hmiProjectInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const hmiListControlsInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    kind: engineeringHmiArtifactKindSchema.optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "HMI artifact limit must be at least 1.")
+      .max(250, "HMI artifact limit must be 250 or lower.")
       .optional(),
   })
   .strict();
@@ -711,6 +742,13 @@ export interface TcErrorListToolOutput extends EngineeringErrorListResult {}
 export interface TcErrorContextToolOutput extends EngineeringErrorContextResult {}
 export interface TcOutputReadToolOutput extends EngineeringOutputReadResult {}
 export interface TcResourceReadToolOutput extends EngineeringResourceReadResult {}
+export interface HmiStateToolOutput extends EngineeringHmiStateResult {}
+export interface HmiListProjectsToolOutput
+  extends EngineeringHmiListProjectsResult {}
+export interface HmiPreviewInfoToolOutput
+  extends EngineeringHmiPreviewInfoResult {}
+export interface HmiListControlsToolOutput
+  extends EngineeringHmiListControlsResult {}
 export interface TcTreeReadToolOutput extends EngineeringTreeReadResult {}
 export interface TcTreeSearchToolOutput extends EngineeringTreeSearchResult {}
 export interface TcTreeDescribeItemToolOutput
@@ -902,6 +940,19 @@ export function createToolDefinitions(): Array<
   | ToolDefinition<
       z.infer<typeof tcResourceReadInputSchema>,
       TcResourceReadToolOutput
+    >
+  | ToolDefinition<z.infer<typeof hmiProjectInputSchema>, HmiStateToolOutput>
+  | ToolDefinition<
+      z.infer<typeof hmiProjectInputSchema>,
+      HmiListProjectsToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof hmiProjectInputSchema>,
+      HmiPreviewInfoToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof hmiListControlsInputSchema>,
+      HmiListControlsToolOutput
     >
   | ToolDefinition<z.infer<typeof tcTreeReadInputSchema>, TcTreeReadToolOutput>
   | ToolDefinition<
@@ -1246,6 +1297,53 @@ export function createToolDefinitions(): Array<
         "Dereference bounded TwinCAT engineering resource URIs such as plcc, err, io, tcfile, and tcfolder.",
       inputSchema: tcResourceReadInputSchema,
       handler: async (input, context) => context.runtime.tcResourceRead(input),
+    }),
+    createToolDefinition({
+      name: "hmi_state",
+      description:
+        "Inspect read-only HMI engineering project state, inferred ports, and preview availability.",
+      inputSchema: hmiProjectInputSchema,
+      handler: async (input, context) => context.runtime.hmiState(input),
+    }),
+    createToolDefinition({
+      name: "hmi_list_projects",
+      description: "List configured HMI engineering projects from project files.",
+      inputSchema: hmiProjectInputSchema,
+      handler: async (input, context) => context.runtime.hmiListProjects(input),
+    }),
+    createToolDefinition({
+      name: "hmi_preview_info",
+      description:
+        "Describe whether a configured HMI project has enough live backend information for preview.",
+      inputSchema: hmiProjectInputSchema,
+      handler: async (input, context) => context.runtime.hmiPreviewInfo(input),
+    }),
+    createToolDefinition({
+      name: "hmi_list_controls",
+      description:
+        "List HMI view, control, user-control, and content artifacts referenced by configured HMI project files.",
+      inputSchema: hmiListControlsInputSchema,
+      handler: async (input, context) => {
+        const controlsInput: {
+          project?: string;
+          kind?: EngineeringHmiArtifactKind;
+          limit?: number;
+        } = {};
+
+        if (input.project !== undefined) {
+          controlsInput.project = input.project;
+        }
+
+        if (input.kind !== undefined) {
+          controlsInput.kind = input.kind;
+        }
+
+        if (input.limit !== undefined) {
+          controlsInput.limit = input.limit;
+        }
+
+        return context.runtime.hmiListControls(controlsInput);
+      },
     }),
     createToolDefinition({
       name: "tc_tree_read",

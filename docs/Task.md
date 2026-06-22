@@ -94,7 +94,7 @@ Fehlerbilder andere sind.
 - MCP Resources/Subscriptions fuer geeignete Artefakte pruefen, insbesondere Watches und Fehlerlisten.
 - URI-Schemata dokumentieren und versionieren, damit spaetere Tool-Erweiterungen kompatibel bleiben.
 
-### 25. HMI-Engineering-Kontext vorsichtig explorieren `[Open]`
+### 25. HMI-Engineering-Kontext vorsichtig explorieren `[Done]`
 
 - HMI-Unterstuetzung zunaechst nur explorativ und read-only behandeln.
 - `hmi_state` pruefen, um aktive HMI-Projekte, Router-Port und Server-Port sichtbar zu machen.

@@ -601,6 +601,70 @@ function createRuntimeStub() {
       bytesRead: 12,
       truncated: false,
     }),
+    hmiState: () => ({
+      backendCapabilities: [],
+      projects: [
+        {
+          project: {
+            id: "configuredProjectFiles:c:/machine/hmi.hmiproj",
+            name: "HMI",
+            path: "C:/Machine/HMI.hmiproj",
+            type: "hmi" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+          artifactCount: 1,
+          routerPort: 48898,
+          serverPort: 1010,
+          previewAvailable: false,
+          previewReason: "No live HMI preview endpoint.",
+        },
+      ],
+      count: 1,
+      activeConnection: {
+        available: false,
+        source: "none" as const,
+      },
+    }),
+    hmiListProjects: async () => {
+      const state = await createRuntimeStub().hmiState();
+      return { projects: state.projects, count: state.count };
+    },
+    hmiPreviewInfo: async () => {
+      const state = await createRuntimeStub().hmiState();
+      return {
+        available: false,
+        project: state.projects[0]!.project,
+        routerPort: 48898,
+        serverPort: 1010,
+        reason: "No live HMI preview endpoint.",
+      };
+    },
+    hmiListControls: () => ({
+      controls: [
+        {
+          id: "hmi:view",
+          resourceUri: "tcfile://file?path=C%3A%5C%5CMachine%5C%5CMain.view",
+          name: "Main",
+          kind: "view" as const,
+          path: "/HMI/Main",
+          sourceFile: "C:/Machine/Main.view",
+          project: {
+            id: "configuredProjectFiles:c:/machine/hmi.hmiproj",
+            name: "HMI",
+            path: "C:/Machine/HMI.hmiproj",
+            type: "hmi" as const,
+            exists: true,
+            source: "configuredProjectFiles" as const,
+            workbenchId: "configured-project-files",
+          },
+        },
+      ],
+      count: 1,
+      truncated: false,
+      available: true,
+    }),
     tcTreeRead: async () => ({
       item: {
         id: "tree:terminal",
@@ -1063,6 +1127,16 @@ describe("tools", () => {
     const resourceReadTool = tools.find(
       (entry) => entry.name === "tc_resource_read",
     );
+    const hmiStateTool = tools.find((entry) => entry.name === "hmi_state");
+    const hmiProjectsTool = tools.find(
+      (entry) => entry.name === "hmi_list_projects",
+    );
+    const hmiPreviewTool = tools.find(
+      (entry) => entry.name === "hmi_preview_info",
+    );
+    const hmiControlsTool = tools.find(
+      (entry) => entry.name === "hmi_list_controls",
+    );
     const treeReadTool = tools.find((entry) => entry.name === "tc_tree_read");
     const treeSearchTool = tools.find((entry) => entry.name === "tc_tree_search");
     const treeDescribeTool = tools.find(
@@ -1094,6 +1168,10 @@ describe("tools", () => {
     expect(errorContextTool).toBeDefined();
     expect(outputReadTool).toBeDefined();
     expect(resourceReadTool).toBeDefined();
+    expect(hmiStateTool).toBeDefined();
+    expect(hmiProjectsTool).toBeDefined();
+    expect(hmiPreviewTool).toBeDefined();
+    expect(hmiControlsTool).toBeDefined();
     expect(treeReadTool).toBeDefined();
     expect(treeSearchTool).toBeDefined();
     expect(treeDescribeTool).toBeDefined();
@@ -1253,6 +1331,45 @@ describe("tools", () => {
     if (resourceRead.ok) {
       expect(resourceRead.data.kind).toBe("file");
       expect(resourceRead.data.available).toBe(true);
+    }
+
+    const hmiState = await hmiStateTool!.execute(
+      {},
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(hmiState.ok).toBe(true);
+    if (hmiState.ok) {
+      expect(hmiState.data.projects[0]?.serverPort).toBe(1010);
+      expect(hmiState.data.activeConnection.available).toBe(false);
+    }
+
+    const hmiProjects = await hmiProjectsTool!.execute(
+      {},
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(hmiProjects.ok).toBe(true);
+    if (hmiProjects.ok) {
+      expect(hmiProjects.data.projects[0]?.project.type).toBe("hmi");
+    }
+
+    const hmiPreview = await hmiPreviewTool!.execute(
+      { project: "HMI" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(hmiPreview.ok).toBe(true);
+    if (hmiPreview.ok) {
+      expect(hmiPreview.data.available).toBe(false);
+      expect(hmiPreview.data.serverPort).toBe(1010);
+    }
+
+    const hmiControls = await hmiControlsTool!.execute(
+      { kind: "view" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(hmiControls.ok).toBe(true);
+    if (hmiControls.ok) {
+      expect(hmiControls.data.controls[0]?.name).toBe("Main");
+      expect(hmiControls.data.controls[0]?.kind).toBe("view");
     }
 
     const treeSearch = await treeSearchTool!.execute(

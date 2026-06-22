@@ -90,3 +90,20 @@ Task 24 adds resource references for engineering artifacts plus
 `tc_resource_read` for bounded dereferencing. See
 `docs/engineering-resource-uris.md` for the versioned URI schemes and MCP
 Resources/Subscriptions decision.
+
+## HMI Engineering Context
+
+Task 25 adds read-only HMI orientation tools on top of configured `.hmiproj` and
+`.hmi` files:
+
+- `hmi_state`: compact HMI project state, inferred ports, and active-connection
+  availability.
+- `hmi_list_projects`: configured HMI project summaries.
+- `hmi_preview_info`: preview availability and metadata. The configured
+  project-file backend reports preview as unavailable because it has no live HMI
+  server control or verification path.
+- `hmi_list_controls`: referenced HMI view/control/user-control/content
+  artifacts with `tcfile://` resource URIs.
+
+This layer is intentionally exploratory and read-only. See
+`docs/hmi-engineering-context.md` for the detailed scope.
