@@ -40,6 +40,65 @@ historischer Kontext erhalten.
 - Packaging-Sync pruefen: shared `twincat-xae-project-guidelines` muss weiterhin
   beim Packen konsistent in Pi- und MCP-Paket erscheinen.
 
+### 27. Automation-Interface-Helper und DTE-Verbindung aufbauen `[Open]`
+
+- `automationInterface` als echtes Live-XAE-Backend ausarbeiten, getrennt vom
+  bisherigen `configuredProjectFiles` Backend.
+- Windows-only .NET Helper evaluieren, der per JSON ueber stdin/stdout oder
+  lokale Pipe vom Node/Core-Prozess angesprochen wird.
+- Helper als STA-Prozess mit COM Message Filter auslegen, damit abgewiesene
+  Visual-Studio-/TcXaeShell-COM-Aufrufe kontrolliert wiederholt werden koennen.
+- DTE-Verbindung unterstuetzen:
+  - Attach an laufende Visual-Studio-/TcXaeShell-Instanzen ueber Running Object
+    Table und Solution-Pfad.
+  - Optionales Starten einer neuen Instanz ueber ProgIDs wie
+    `TcXaeShell.DTE.17.0`, `VisualStudio.DTE.17.0`,
+    `VisualStudio.DTE.16.0` oder `VisualStudio.DTE.15.0`.
+  - Aktive ProgID, Solution-Pfad, UI-Sichtbarkeit und Timeout konfigurierbar
+    machen.
+- `ITcSysManager` aus dem TwinCAT-Projekt der DTE-Solution ableiten und als
+  Backend-Session kapseln.
+- Capability-Antworten so erweitern, dass Agenten klar zwischen
+  `configuredProjectFiles`, `automationInterface`, `dte` und nicht verfuegbaren
+  Live-Funktionen unterscheiden koennen.
+- Fehlerbilder dokumentieren: fehlendes TwinCAT XAE, falsche ProgID, keine
+  offene Solution, COM `RPC_E_CALL_REJECTED`, Berechtigungen, Bitness- oder
+  Version-Mismatch.
+- Helper-Contract-Tests ohne echte XAE-Installation und Core-Tests gegen
+  gemockte Helper-Antworten planen.
+
+### 28. Read-only XAE-Projekt-, Tree-, POU- und Library-Kontext ueber Automation Interface anbinden `[Open]`
+
+- Workbench- und Projekt-Tools ueber die Live-XAE-Session anbinden:
+  `tc_list_workbenches`, `tc_list_projects`, `tc_project_state`.
+- SysManager-Tree read-only ueber `ITcSmTreeItem` anbinden:
+  `tc_tree_read`, `tc_tree_search`, `tc_tree_describe_item`.
+- PLC-Codekontext ueber Automation-Interface-Schnittstellen anbinden:
+  `plc_list_pous`, `plc_read_pou`, `plc_search_code`, `plc_describe_pou`.
+- POU-Quelltext ueber `ITcPlcDeclaration`, `ITcPlcImplementation` und passende
+  Sub-POU-Schnittstellen lesen, statt nur Projektdateien zu parsen.
+- PLC-Libraries und Placeholder ueber `ITcPlcLibraryManager` anbinden:
+  `plc_list_libraries`, `plc_describe_library`.
+- Resource-URI-Ausgaben so angleichen, dass file-backed und live-backed
+  Engineering-Kontext fuer Agenten moeglichst gleich wirken.
+- Manuelle Windows-XAE-Checkliste fuer echte Integration pflegen.
+
+### 29. Build-, Error-List- und Output-Tools ueber Automation Interface mit Safety-Grenze anbinden `[Open]`
+
+- `tc_error_list`, `tc_error_context` und `tc_output_read` ueber Visual Studio
+  DTE Error List und Output-Fenster anbinden.
+- Build-Funktionen erst nach stabilem read-only Backend aktivieren:
+  `tc_build_project`, `plc_build_project`, `tc_build_and_get_errors`.
+- Build-/Check-All-Objects-Verhalten getrennt modellieren, damit reine
+  Validierung nicht versehentlich Online-Aktionen ausloest.
+- Safety-Grenze technisch erzwingen: kein `ActivateConfiguration`, Download,
+  Login, Start/Stop, Force Values, Safety-Aenderungen oder HMI-Write als
+  Nebeneffekt eines Read-, Error- oder Build-Tools.
+- Ergebnislimits, Timeouts und strukturierte Fehlerreferenzen fuer Error List,
+  Output-Fenster und Build-Ergebnisse definieren.
+- Tests fuer unavailable/live-capability-Faelle, gemockte Error-List-Eintraege
+  und Safety-Boundary-Ausgaben ergaenzen.
+
 ## Phase 3: XAE-Engineering-, Projekt- und Code-Kontext
 
 Diese Phase orientiert sich an den CoAgent-Rechercheergebnissen, bleibt aber
