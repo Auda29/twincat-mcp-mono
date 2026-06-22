@@ -112,6 +112,8 @@ const engineeringPlcObjectKindSchema = z.enum([
   "property",
   "unknown",
 ]);
+const engineeringIssueSeveritySchema = z.enum(["error", "warning", "info"]);
+const engineeringOutputChannelSchema = z.enum(["build", "engineering"]);
 const listSymbolsInputSchema = z
   .object({
     filter: z.string().trim().min(1).optional(),
@@ -300,6 +302,81 @@ const tcListProjectsInputSchema = z
 const tcProjectStateInputSchema = z
   .object({
     project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+const tcBuildProjectInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    target: z.string().trim().min(1).optional(),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1_000, "Build timeout must be at least 1000 ms.")
+      .max(3_600_000, "Build timeout must be 3600000 ms or lower.")
+      .optional(),
+  })
+  .strict();
+const tcBuildAndGetErrorsInputSchema = tcBuildProjectInputSchema
+  .extend({
+    limit: z
+      .number()
+      .int()
+      .min(1, "Engineering issue limit must be at least 1.")
+      .max(250, "Engineering issue limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+const tcErrorListInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    severity: z
+      .union([
+        engineeringIssueSeveritySchema,
+        z
+          .array(engineeringIssueSeveritySchema)
+          .min(1, "At least one severity is required.")
+          .max(3, "At most 3 severities are supported."),
+      ])
+      .optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "Engineering issue limit must be at least 1.")
+      .max(250, "Engineering issue limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+const tcErrorContextInputSchema = z
+  .object({
+    error: z.string().trim().min(1).optional(),
+    file: z.string().trim().min(1).optional(),
+    line: z.number().int().min(1).optional(),
+    project: z.string().trim().min(1).optional(),
+    contextLines: z
+      .number()
+      .int()
+      .min(0, "Context line count must be 0 or higher.")
+      .max(20, "Context line count must be 20 or lower.")
+      .optional(),
+  })
+  .strict();
+const tcOutputReadInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    channel: engineeringOutputChannelSchema.optional(),
+    contains: z.string().trim().min(1).optional(),
+    limitBytes: z
+      .number()
+      .int()
+      .min(1_024, "Engineering output byte limit must be at least 1024 bytes.")
+      .max(1_048_576, "Engineering output byte limit must be 1048576 bytes or lower.")
+      .optional(),
+    tailLines: z
+      .number()
+      .int()
+      .min(1, "Engineering output tail line limit must be at least 1.")
+      .max(5_000, "Engineering output tail line limit must be 5000 or lower.")
+      .optional(),
   })
   .strict();
 const tcTreeReadInputSchema = z
@@ -891,6 +968,66 @@ export function createMcpToolDefinitions(
         runtime.tcProjectState(
           input.project === undefined ? {} : { project: input.project },
         ),
+    },
+    {
+      name: "tc_build_project",
+      title: "TwinCAT Build Project",
+      description:
+        "Build a configured TwinCAT/XAE engineering project when a live build backend is available.",
+      inputSchema: tcBuildProjectInputSchema,
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcBuildProjectInputSchema>) =>
+        runtime.tcBuildProject(input),
+    },
+    {
+      name: "plc_build_project",
+      title: "PLC Build Project",
+      description:
+        "Build a configured PLC engineering project when it can be addressed separately by the active backend.",
+      inputSchema: tcBuildProjectInputSchema,
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcBuildProjectInputSchema>) =>
+        runtime.plcBuildProject(input),
+    },
+    {
+      name: "tc_build_and_get_errors",
+      title: "TwinCAT Build And Get Errors",
+      description:
+        "Run a bounded TwinCAT build and return structured engineering errors and warnings.",
+      inputSchema: tcBuildAndGetErrorsInputSchema,
+      annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcBuildAndGetErrorsInputSchema>) =>
+        runtime.tcBuildAndGetErrors(input),
+    },
+    {
+      name: "tc_error_list",
+      title: "TwinCAT Engineering Errors",
+      description:
+        "List bounded engineering, compiler, or parser errors and warnings from the active engineering backend.",
+      inputSchema: tcErrorListInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcErrorListInputSchema>) =>
+        runtime.tcErrorList(input),
+    },
+    {
+      name: "tc_error_context",
+      title: "TwinCAT Engineering Error Context",
+      description:
+        "Resolve one engineering error to bounded source-file context when location data is available.",
+      inputSchema: tcErrorContextInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcErrorContextInputSchema>) =>
+        runtime.tcErrorContext(input),
+    },
+    {
+      name: "tc_output_read",
+      title: "TwinCAT Engineering Output",
+      description:
+        "Read bounded build or engineering output from the active engineering backend.",
+      inputSchema: tcOutputReadInputSchema,
+      annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: z.infer<typeof tcOutputReadInputSchema>) =>
+        runtime.tcOutputRead(input),
     },
     {
       name: "tc_tree_read",

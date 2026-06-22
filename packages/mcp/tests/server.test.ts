@@ -491,6 +491,80 @@ function createRuntimeStub(
       ],
       count: 1,
     }),
+    tcBuildProject: () => ({
+      scope: "twinCatProject" as const,
+      status: "unavailable" as const,
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      durationMs: 0,
+      safetyBoundary: {
+        activateConfiguration: false,
+        download: false,
+        login: false,
+        run: false,
+        stop: false,
+      },
+      reason: "No live XAE backend.",
+      errors: [],
+      warnings: [],
+      output: { channel: "build" as const, text: "Build unavailable", truncated: false },
+    }),
+    plcBuildProject: () => ({
+      scope: "plcProject" as const,
+      status: "unavailable" as const,
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      durationMs: 0,
+      safetyBoundary: {
+        activateConfiguration: false,
+        download: false,
+        login: false,
+        run: false,
+        stop: false,
+      },
+      reason: "No live XAE backend.",
+      errors: [],
+      warnings: [],
+      output: { channel: "build" as const, text: "Build unavailable", truncated: false },
+    }),
+    tcBuildAndGetErrors: async () => {
+      const build = await runtime.tcBuildProject();
+      return {
+        build,
+        errors: [],
+        warnings: [],
+        count: 0,
+        truncated: false,
+      };
+    },
+    tcErrorList: () => ({
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      errors: [],
+      warnings: [],
+      issues: [],
+      count: 0,
+      truncated: false,
+      reason: "No live XAE backend.",
+    }),
+    tcErrorContext: () => ({
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      reason: "No error context.",
+    }),
+    tcOutputRead: () => ({
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      channel: "build" as const,
+      text: "",
+      bytesRead: 0,
+      truncated: false,
+      reason: "No live XAE backend.",
+    }),
     tcTreeRead: async () => ({
       item: {
         id: "tree:terminal",
@@ -814,6 +888,12 @@ describe("mcp tool definitions", () => {
       "tc_list_workbenches",
       "tc_list_projects",
       "tc_project_state",
+      "tc_build_project",
+      "plc_build_project",
+      "tc_build_and_get_errors",
+      "tc_error_list",
+      "tc_error_context",
+      "tc_output_read",
       "tc_tree_read",
       "tc_tree_search",
       "tc_tree_describe_item",
@@ -1055,6 +1135,61 @@ describe("mcp tool definitions", () => {
           activeConnection: { available: false },
         },
       ],
+    });
+
+    const build = await callMcpTool(tools, "tc_build_project", {
+      project: "Machine",
+    });
+    expect(build.isError).toBeUndefined();
+    expect(build.structuredContent).toMatchObject({
+      scope: "twinCatProject",
+      status: "unavailable",
+      safetyBoundary: { activateConfiguration: false, download: false },
+    });
+
+    const plcBuild = await callMcpTool(tools, "plc_build_project", {});
+    expect(plcBuild.isError).toBeUndefined();
+    expect(plcBuild.structuredContent).toMatchObject({
+      scope: "plcProject",
+      status: "unavailable",
+    });
+
+    const buildErrors = await callMcpTool(
+      tools,
+      "tc_build_and_get_errors",
+      { limit: 5 },
+    );
+    expect(buildErrors.isError).toBeUndefined();
+    expect(buildErrors.structuredContent).toMatchObject({
+      build: { status: "unavailable" },
+      count: 0,
+      truncated: false,
+    });
+
+    const engineeringErrors = await callMcpTool(tools, "tc_error_list", {
+      severity: ["error", "warning"],
+    });
+    expect(engineeringErrors.isError).toBeUndefined();
+    expect(engineeringErrors.structuredContent).toMatchObject({
+      available: false,
+      count: 0,
+    });
+
+    const errorContext = await callMcpTool(tools, "tc_error_context", {
+      error: "err://missing",
+    });
+    expect(errorContext.isError).toBeUndefined();
+    expect(errorContext.structuredContent).toMatchObject({
+      available: false,
+    });
+
+    const output = await callMcpTool(tools, "tc_output_read", {
+      channel: "build",
+    });
+    expect(output.isError).toBeUndefined();
+    expect(output.structuredContent).toMatchObject({
+      available: false,
+      channel: "build",
     });
 
     const treeSearch = await callMcpTool(tools, "tc_tree_search", {

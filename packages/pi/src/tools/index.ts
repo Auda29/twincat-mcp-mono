@@ -2,11 +2,16 @@ import { z } from "zod";
 
 import {
   WriteDeniedError,
+  type EngineeringBuildAndGetErrorsResult,
+  type EngineeringBuildResult,
+  type EngineeringErrorContextResult,
+  type EngineeringErrorListResult,
   type EngineeringListProjectsResult,
   type EngineeringListWorkbenchesResult,
   type EngineeringIoDescribeDeviceResult,
   type EngineeringIoDescribeTerminalResult,
   type EngineeringIoListTopologyResult,
+  type EngineeringOutputReadResult,
   type EngineeringProjectStateResult,
   type EngineeringProjectTypeConfig,
   type EngineeringPlcDescribeLibraryResult,
@@ -166,6 +171,9 @@ const engineeringPlcObjectKindSchema = z.enum([
   "unknown",
 ]);
 
+const engineeringIssueSeveritySchema = z.enum(["error", "warning", "info"]);
+const engineeringOutputChannelSchema = z.enum(["build", "engineering"]);
+
 const diagnosticSeveritySchema = z.enum([
   "critical",
   "error",
@@ -300,6 +308,89 @@ const tcListProjectsInputSchema = z
 const tcProjectStateInputSchema = z
   .object({
     project: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+const tcBuildProjectInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    target: z.string().trim().min(1).optional(),
+    timeoutMs: z
+      .number()
+      .int()
+      .min(1_000, "Build timeout must be at least 1000 ms.")
+      .max(3_600_000, "Build timeout must be 3600000 ms or lower.")
+      .optional(),
+  })
+  .strict();
+
+const tcBuildAndGetErrorsInputSchema = tcBuildProjectInputSchema
+  .extend({
+    limit: z
+      .number()
+      .int()
+      .min(1, "Engineering issue limit must be at least 1.")
+      .max(250, "Engineering issue limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+
+const tcErrorListInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    severity: z
+      .union([
+        engineeringIssueSeveritySchema,
+        z
+          .array(engineeringIssueSeveritySchema)
+          .min(1, "At least one severity is required.")
+          .max(3, "At most 3 severities are supported."),
+      ])
+      .optional(),
+    limit: z
+      .number()
+      .int()
+      .min(1, "Engineering issue limit must be at least 1.")
+      .max(250, "Engineering issue limit must be 250 or lower.")
+      .optional(),
+  })
+  .strict();
+
+const tcErrorContextInputSchema = z
+  .object({
+    error: z.string().trim().min(1).optional(),
+    file: z.string().trim().min(1).optional(),
+    line: z.number().int().min(1).optional(),
+    project: z.string().trim().min(1).optional(),
+    contextLines: z
+      .number()
+      .int()
+      .min(0, "Context line count must be 0 or higher.")
+      .max(20, "Context line count must be 20 or lower.")
+      .optional(),
+  })
+  .strict();
+
+const tcOutputReadInputSchema = z
+  .object({
+    project: z.string().trim().min(1).optional(),
+    channel: engineeringOutputChannelSchema.optional(),
+    contains: z.string().trim().min(1).optional(),
+    limitBytes: z
+      .number()
+      .int()
+      .min(1_024, "Engineering output byte limit must be at least 1024 bytes.")
+      .max(
+        1_048_576,
+        "Engineering output byte limit must be 1048576 bytes or lower.",
+      )
+      .optional(),
+    tailLines: z
+      .number()
+      .int()
+      .min(1, "Engineering output tail line limit must be at least 1.")
+      .max(5_000, "Engineering output tail line limit must be 5000 or lower.")
+      .optional(),
   })
   .strict();
 
@@ -590,6 +681,13 @@ export interface TcListWorkbenchesToolOutput
   extends EngineeringListWorkbenchesResult {}
 export interface TcListProjectsToolOutput extends EngineeringListProjectsResult {}
 export interface TcProjectStateToolOutput extends EngineeringProjectStateResult {}
+export interface TcBuildProjectToolOutput extends EngineeringBuildResult {}
+export interface PlcBuildProjectToolOutput extends EngineeringBuildResult {}
+export interface TcBuildAndGetErrorsToolOutput
+  extends EngineeringBuildAndGetErrorsResult {}
+export interface TcErrorListToolOutput extends EngineeringErrorListResult {}
+export interface TcErrorContextToolOutput extends EngineeringErrorContextResult {}
+export interface TcOutputReadToolOutput extends EngineeringOutputReadResult {}
 export interface TcTreeReadToolOutput extends EngineeringTreeReadResult {}
 export interface TcTreeSearchToolOutput extends EngineeringTreeSearchResult {}
 export interface TcTreeDescribeItemToolOutput
@@ -760,6 +858,24 @@ export function createToolDefinitions(): Array<
       z.infer<typeof tcProjectStateInputSchema>,
       TcProjectStateToolOutput
     >
+  | ToolDefinition<
+      z.infer<typeof tcBuildProjectInputSchema>,
+      TcBuildProjectToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof tcBuildProjectInputSchema>,
+      PlcBuildProjectToolOutput
+    >
+  | ToolDefinition<
+      z.infer<typeof tcBuildAndGetErrorsInputSchema>,
+      TcBuildAndGetErrorsToolOutput
+    >
+  | ToolDefinition<z.infer<typeof tcErrorListInputSchema>, TcErrorListToolOutput>
+  | ToolDefinition<
+      z.infer<typeof tcErrorContextInputSchema>,
+      TcErrorContextToolOutput
+    >
+  | ToolDefinition<z.infer<typeof tcOutputReadInputSchema>, TcOutputReadToolOutput>
   | ToolDefinition<z.infer<typeof tcTreeReadInputSchema>, TcTreeReadToolOutput>
   | ToolDefinition<
       z.infer<typeof tcTreeSearchInputSchema>,
@@ -1053,6 +1169,49 @@ export function createToolDefinitions(): Array<
         context.runtime.tcProjectState(
           input.project === undefined ? {} : { project: input.project },
         ),
+    }),
+    createToolDefinition({
+      name: "tc_build_project",
+      description:
+        "Build a configured TwinCAT/XAE engineering project when a live build backend is available.",
+      inputSchema: tcBuildProjectInputSchema,
+      handler: async (input, context) => context.runtime.tcBuildProject(input),
+    }),
+    createToolDefinition({
+      name: "plc_build_project",
+      description:
+        "Build a configured PLC engineering project when it can be addressed separately by the active backend.",
+      inputSchema: tcBuildProjectInputSchema,
+      handler: async (input, context) => context.runtime.plcBuildProject(input),
+    }),
+    createToolDefinition({
+      name: "tc_build_and_get_errors",
+      description:
+        "Run a bounded TwinCAT build and return structured engineering errors and warnings.",
+      inputSchema: tcBuildAndGetErrorsInputSchema,
+      handler: async (input, context) =>
+        context.runtime.tcBuildAndGetErrors(input),
+    }),
+    createToolDefinition({
+      name: "tc_error_list",
+      description:
+        "List bounded engineering, compiler, or parser errors and warnings from the active engineering backend.",
+      inputSchema: tcErrorListInputSchema,
+      handler: async (input, context) => context.runtime.tcErrorList(input),
+    }),
+    createToolDefinition({
+      name: "tc_error_context",
+      description:
+        "Resolve one engineering error to bounded source-file context when location data is available.",
+      inputSchema: tcErrorContextInputSchema,
+      handler: async (input, context) => context.runtime.tcErrorContext(input),
+    }),
+    createToolDefinition({
+      name: "tc_output_read",
+      description:
+        "Read bounded build or engineering output from the active engineering backend.",
+      inputSchema: tcOutputReadInputSchema,
+      handler: async (input, context) => context.runtime.tcOutputRead(input),
     }),
     createToolDefinition({
       name: "tc_tree_read",

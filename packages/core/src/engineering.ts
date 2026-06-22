@@ -285,6 +285,132 @@ export interface EngineeringPlcDescribeLibraryResult {
   readonly library: EngineeringPlcLibrarySummary;
 }
 
+export type EngineeringBuildScope = "twinCatProject" | "plcProject";
+export type EngineeringBuildStatus =
+  | "succeeded"
+  | "failed"
+  | "unavailable"
+  | "skipped";
+export type EngineeringIssueSeverity = "error" | "warning" | "info";
+export type EngineeringOutputChannel = "build" | "engineering";
+
+export interface EngineeringBuildInput {
+  readonly project?: string | undefined;
+  readonly target?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+}
+
+export interface EngineeringBuildSafetyBoundary {
+  readonly activateConfiguration: false;
+  readonly download: false;
+  readonly login: false;
+  readonly run: false;
+  readonly stop: false;
+}
+
+export interface EngineeringIssue {
+  readonly id: string;
+  readonly uri: string;
+  readonly severity: EngineeringIssueSeverity;
+  readonly message: string;
+  readonly project?: EngineeringProjectSummary | undefined;
+  readonly source: "engineeringBackend" | "compiler" | "parser";
+  readonly code?: string | undefined;
+  readonly file?: string | undefined;
+  readonly line?: number | undefined;
+  readonly column?: number | undefined;
+}
+
+export interface EngineeringBuildResult {
+  readonly scope: EngineeringBuildScope;
+  readonly status: EngineeringBuildStatus;
+  readonly available: boolean;
+  readonly backend: EngineeringBackendConfig;
+  readonly project?: EngineeringProjectSummary | undefined;
+  readonly target?: string | undefined;
+  readonly startedAt: string;
+  readonly completedAt: string;
+  readonly durationMs: number;
+  readonly safetyBoundary: EngineeringBuildSafetyBoundary;
+  readonly reason?: string | undefined;
+  readonly errors: EngineeringIssue[];
+  readonly warnings: EngineeringIssue[];
+  readonly output: {
+    readonly channel: EngineeringOutputChannel;
+    readonly text: string;
+    readonly truncated: boolean;
+  };
+}
+
+export interface EngineeringBuildAndGetErrorsInput extends EngineeringBuildInput {
+  readonly limit?: number | undefined;
+}
+
+export interface EngineeringBuildAndGetErrorsResult {
+  readonly build: EngineeringBuildResult;
+  readonly errors: EngineeringIssue[];
+  readonly warnings: EngineeringIssue[];
+  readonly count: number;
+  readonly truncated: boolean;
+}
+
+export interface EngineeringErrorListInput {
+  readonly project?: string | undefined;
+  readonly severity?: EngineeringIssueSeverity | readonly EngineeringIssueSeverity[] | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface EngineeringErrorListResult {
+  readonly available: boolean;
+  readonly backend: EngineeringBackendConfig;
+  readonly errors: EngineeringIssue[];
+  readonly warnings: EngineeringIssue[];
+  readonly issues: EngineeringIssue[];
+  readonly count: number;
+  readonly truncated: boolean;
+  readonly reason?: string | undefined;
+}
+
+export interface EngineeringErrorContextInput {
+  readonly error?: string | undefined;
+  readonly file?: string | undefined;
+  readonly line?: number | undefined;
+  readonly project?: string | undefined;
+  readonly contextLines?: number | undefined;
+}
+
+export interface EngineeringErrorContextResult {
+  readonly available: boolean;
+  readonly backend: EngineeringBackendConfig;
+  readonly issue?: EngineeringIssue | undefined;
+  readonly file?: string | undefined;
+  readonly line?: number | undefined;
+  readonly context?: {
+    readonly startLine: number;
+    readonly endLine: number;
+    readonly text: string;
+  } | undefined;
+  readonly reason?: string | undefined;
+}
+
+export interface EngineeringOutputReadInput {
+  readonly project?: string | undefined;
+  readonly channel?: EngineeringOutputChannel | undefined;
+  readonly contains?: string | undefined;
+  readonly limitBytes?: number | undefined;
+  readonly tailLines?: number | undefined;
+}
+
+export interface EngineeringOutputReadResult {
+  readonly available: boolean;
+  readonly backend: EngineeringBackendConfig;
+  readonly channel: EngineeringOutputChannel;
+  readonly text: string;
+  readonly bytesRead: number;
+  readonly truncated: boolean;
+  readonly reason?: string | undefined;
+}
+
 interface SolutionProjectReference {
   readonly name: string;
   readonly path: string;
@@ -323,6 +449,21 @@ const PLC_OBJECT_EXTENSIONS = new Set([".tcpou", ".tcgvl", ".tcdut", ".tcio"]);
 const DEFAULT_CODE_SEARCH_LIMIT = 50;
 const MAX_CODE_SEARCH_LIMIT = 250;
 const CODE_PREVIEW_LINE_COUNT = 12;
+const DEFAULT_ENGINEERING_ISSUE_LIMIT = 50;
+const MAX_ENGINEERING_ISSUE_LIMIT = 250;
+const DEFAULT_ENGINEERING_CONTEXT_LINES = 3;
+const MAX_ENGINEERING_CONTEXT_LINES = 20;
+const DEFAULT_ENGINEERING_OUTPUT_LIMIT_BYTES = 65_536;
+const MAX_ENGINEERING_OUTPUT_LIMIT_BYTES = 1_048_576;
+const BUILD_SAFETY_BOUNDARY: EngineeringBuildSafetyBoundary = {
+  activateConfiguration: false,
+  download: false,
+  login: false,
+  run: false,
+  stop: false,
+};
+const CONFIGURED_BACKEND_BUILD_UNAVAILABLE_REASON =
+  "The configured project-file backend has no live XAE/Visual Studio Automation Interface connection, so it cannot run TwinCAT builds or read compiler error lists.";
 const xmlParser = new XMLParser({
   ignoreAttributes: false,
   attributeNamePrefix: "@",
@@ -1431,6 +1572,216 @@ export class EngineeringService {
     }
 
     return { library };
+  }
+
+  tcBuildProject(input: EngineeringBuildInput = {}): EngineeringBuildResult {
+    return this.createUnavailableBuildResult(input, "twinCatProject");
+  }
+
+  plcBuildProject(input: EngineeringBuildInput = {}): EngineeringBuildResult {
+    return this.createUnavailableBuildResult(input, "plcProject");
+  }
+
+  tcBuildAndGetErrors(
+    input: EngineeringBuildAndGetErrorsInput = {},
+  ): EngineeringBuildAndGetErrorsResult {
+    const build = this.tcBuildProject(input);
+    const issueList = this.tcErrorList({
+      project: input.project,
+      limit: input.limit,
+      severity: ["error", "warning"],
+    });
+
+    return {
+      build,
+      errors: issueList.errors,
+      warnings: issueList.warnings,
+      count: issueList.count,
+      truncated: issueList.truncated,
+    };
+  }
+
+  tcErrorList(input: EngineeringErrorListInput = {}): EngineeringErrorListResult {
+    const limit = Math.min(
+      Math.max(input.limit ?? DEFAULT_ENGINEERING_ISSUE_LIMIT, 1),
+      MAX_ENGINEERING_ISSUE_LIMIT,
+    );
+    const severities =
+      input.severity === undefined
+        ? new Set<EngineeringIssueSeverity>(["error", "warning", "info"])
+        : new Set(
+            Array.isArray(input.severity) ? input.severity : [input.severity],
+          );
+    const issues = this.collectEngineeringIssues(input.project).filter((issue) =>
+      severities.has(issue.severity),
+    );
+    const limitedIssues = issues.slice(0, limit);
+
+    return {
+      available: false,
+      backend: this.config.backend,
+      errors: limitedIssues.filter((issue) => issue.severity === "error"),
+      warnings: limitedIssues.filter((issue) => issue.severity === "warning"),
+      issues: limitedIssues,
+      count: limitedIssues.length,
+      truncated: issues.length > limit,
+      reason: CONFIGURED_BACKEND_BUILD_UNAVAILABLE_REASON,
+    };
+  }
+
+  tcErrorContext(
+    input: EngineeringErrorContextInput,
+  ): EngineeringErrorContextResult {
+    const issue =
+      input.error === undefined
+        ? undefined
+        : this.collectEngineeringIssues(input.project).find(
+            (entry) =>
+              entry.id.toLowerCase() === input.error?.trim().toLowerCase() ||
+              entry.uri.toLowerCase() === input.error?.trim().toLowerCase(),
+          );
+    const file = input.file ?? issue?.file;
+    const line = input.line ?? issue?.line;
+
+    if (file === undefined || line === undefined) {
+      return {
+        available: false,
+        backend: this.config.backend,
+        ...(issue === undefined ? {} : { issue }),
+        reason:
+          "No engineering error source location is available for the configured project-file backend.",
+      };
+    }
+
+    const resolvedFile = this.resolveProjectFile(file, input.project);
+    if (resolvedFile === undefined || !existsSync(resolvedFile)) {
+      return {
+        available: false,
+        backend: this.config.backend,
+        ...(issue === undefined ? {} : { issue }),
+        file,
+        line,
+        reason:
+          "The requested error context file is not part of a configured engineering project.",
+      };
+    }
+
+    const lines = readFileSync(resolvedFile, "utf8").split(/\r?\n/);
+    const contextLines = Math.min(
+      Math.max(input.contextLines ?? DEFAULT_ENGINEERING_CONTEXT_LINES, 0),
+      MAX_ENGINEERING_CONTEXT_LINES,
+    );
+    const targetLine = Math.min(Math.max(line, 1), lines.length);
+    const startLine = Math.max(targetLine - contextLines, 1);
+    const endLine = Math.min(targetLine + contextLines, lines.length);
+    const text = lines.slice(startLine - 1, endLine).join("\n");
+
+    return {
+      available: true,
+      backend: this.config.backend,
+      ...(issue === undefined ? {} : { issue }),
+      file: resolvedFile,
+      line: targetLine,
+      context: {
+        startLine,
+        endLine,
+        text,
+      },
+    };
+  }
+
+  tcOutputRead(
+    input: EngineeringOutputReadInput = {},
+  ): EngineeringOutputReadResult {
+    const channel = input.channel ?? "build";
+    const limitBytes = Math.min(
+      Math.max(input.limitBytes ?? DEFAULT_ENGINEERING_OUTPUT_LIMIT_BYTES, 1),
+      MAX_ENGINEERING_OUTPUT_LIMIT_BYTES,
+    );
+    const text = "";
+
+    return {
+      available: false,
+      backend: this.config.backend,
+      channel,
+      text,
+      bytesRead: Math.min(Buffer.byteLength(text, "utf8"), limitBytes),
+      truncated: false,
+      reason: CONFIGURED_BACKEND_BUILD_UNAVAILABLE_REASON,
+    };
+  }
+
+  private createUnavailableBuildResult(
+    input: EngineeringBuildInput,
+    scope: EngineeringBuildScope,
+  ): EngineeringBuildResult {
+    const startedAt = new Date().toISOString();
+    const project = this.findBuildProject(input.project, scope);
+    const completedAt = new Date().toISOString();
+    const outputText =
+      `${scope} build is unavailable for backend "${this.config.backend}". ` +
+      "No Activate Configuration, Download, Login, Run, or Stop action was performed.";
+
+    return {
+      scope,
+      status: "unavailable",
+      available: false,
+      backend: this.config.backend,
+      ...(project === undefined ? {} : { project }),
+      ...(input.target === undefined ? {} : { target: input.target }),
+      startedAt,
+      completedAt,
+      durationMs: Math.max(
+        new Date(completedAt).getTime() - new Date(startedAt).getTime(),
+        0,
+      ),
+      safetyBoundary: BUILD_SAFETY_BOUNDARY,
+      reason: CONFIGURED_BACKEND_BUILD_UNAVAILABLE_REASON,
+      errors: [],
+      warnings: [],
+      output: {
+        channel: "build",
+        text: outputText,
+        truncated: false,
+      },
+    };
+  }
+
+  private findBuildProject(
+    projectFilter: string | undefined,
+    scope: EngineeringBuildScope,
+  ): EngineeringProjectSummary | undefined {
+    const preferredType = scope === "plcProject" ? "plc" : undefined;
+    return this.filterProjects(projectFilter, preferredType)[0];
+  }
+
+  private collectEngineeringIssues(
+    projectFilter?: string,
+  ): EngineeringIssue[] {
+    void this.filterProjects(projectFilter);
+    return [];
+  }
+
+  private resolveProjectFile(
+    file: string,
+    projectFilter?: string,
+  ): string | undefined {
+    const projects = this.filterProjects(projectFilter);
+    for (const project of projects) {
+      const projectDirectory = dirname(project.path);
+      const resolved = normalizeProjectPath(file, projectDirectory);
+      const normalizedProjectDirectory = `${normalize(projectDirectory).toLowerCase()}\\`;
+      const normalizedResolved = normalize(resolved).toLowerCase();
+
+      if (
+        normalizedResolved === project.path.toLowerCase() ||
+        normalizedResolved.startsWith(normalizedProjectDirectory)
+      ) {
+        return resolved;
+      }
+    }
+
+    return undefined;
   }
 
   private discoverProjects(): EngineeringProjectSummary[] {

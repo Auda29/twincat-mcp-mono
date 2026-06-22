@@ -72,7 +72,7 @@ Fehlerbilder andere sind.
 - `plc_list_libraries` und `plc_describe_library` pruefen, um installierte/referenzierte PLC-Bibliotheken sichtbar zu machen. `[Done]`
 - Schreibende Code-Tools wie `plc_update_pou`, `plc_create_pou`, `plc_delete_pou` erst nach stabilem Read-only-Design planen. `[Done: weiterhin out of scope]`
 
-### 23. Engineering-Build und Fehlerkontext ergaenzen `[Open]`
+### 23. Engineering-Build und Fehlerkontext ergaenzen `[Done]`
 
 - `tc_build_project` als ersten Build-Toolcall vorsehen, um ein explizit konfiguriertes TwinCAT-/XAE-Projekt zu bauen.
 - `plc_build_project` als PLC-spezifische Variante pruefen, wenn PLC-Projekte eindeutig getrennt vom TwinCAT-Gesamtprojekt adressiert werden koennen.

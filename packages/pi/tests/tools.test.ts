@@ -512,6 +512,85 @@ function createRuntimeStub() {
       ],
       count: 1,
     }),
+    tcBuildProject: () => ({
+      scope: "twinCatProject" as const,
+      status: "unavailable" as const,
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      durationMs: 0,
+      safetyBoundary: {
+        activateConfiguration: false,
+        download: false,
+        login: false,
+        run: false,
+        stop: false,
+      },
+      reason: "No live XAE backend.",
+      errors: [],
+      warnings: [],
+      output: {
+        channel: "build" as const,
+        text: "Build unavailable",
+        truncated: false,
+      },
+    }),
+    plcBuildProject: () => ({
+      scope: "plcProject" as const,
+      status: "unavailable" as const,
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: "2026-01-01T00:00:00.000Z",
+      durationMs: 0,
+      safetyBoundary: {
+        activateConfiguration: false,
+        download: false,
+        login: false,
+        run: false,
+        stop: false,
+      },
+      reason: "No live XAE backend.",
+      errors: [],
+      warnings: [],
+      output: {
+        channel: "build" as const,
+        text: "Build unavailable",
+        truncated: false,
+      },
+    }),
+    tcBuildAndGetErrors: async () => ({
+      build: createRuntimeStub().tcBuildProject(),
+      errors: [],
+      warnings: [],
+      count: 0,
+      truncated: false,
+    }),
+    tcErrorList: () => ({
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      errors: [],
+      warnings: [],
+      issues: [],
+      count: 0,
+      truncated: false,
+      reason: "No live XAE backend.",
+    }),
+    tcErrorContext: () => ({
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      reason: "No error context.",
+    }),
+    tcOutputRead: () => ({
+      available: false,
+      backend: "configuredProjectFiles" as const,
+      channel: "build" as const,
+      text: "",
+      bytesRead: 0,
+      truncated: false,
+      reason: "No live XAE backend.",
+    }),
     tcTreeRead: async () => ({
       item: {
         id: "tree:terminal",
@@ -957,6 +1036,20 @@ describe("tools", () => {
     const projectStateTool = tools.find(
       (entry) => entry.name === "tc_project_state",
     );
+    const buildTool = tools.find((entry) => entry.name === "tc_build_project");
+    const plcBuildTool = tools.find(
+      (entry) => entry.name === "plc_build_project",
+    );
+    const buildErrorsTool = tools.find(
+      (entry) => entry.name === "tc_build_and_get_errors",
+    );
+    const errorListTool = tools.find((entry) => entry.name === "tc_error_list");
+    const errorContextTool = tools.find(
+      (entry) => entry.name === "tc_error_context",
+    );
+    const outputReadTool = tools.find(
+      (entry) => entry.name === "tc_output_read",
+    );
     const treeReadTool = tools.find((entry) => entry.name === "tc_tree_read");
     const treeSearchTool = tools.find((entry) => entry.name === "tc_tree_search");
     const treeDescribeTool = tools.find(
@@ -981,6 +1074,12 @@ describe("tools", () => {
     expect(workbenchesTool).toBeDefined();
     expect(projectsTool).toBeDefined();
     expect(projectStateTool).toBeDefined();
+    expect(buildTool).toBeDefined();
+    expect(plcBuildTool).toBeDefined();
+    expect(buildErrorsTool).toBeDefined();
+    expect(errorListTool).toBeDefined();
+    expect(errorContextTool).toBeDefined();
+    expect(outputReadTool).toBeDefined();
     expect(treeReadTool).toBeDefined();
     expect(treeSearchTool).toBeDefined();
     expect(treeDescribeTool).toBeDefined();
@@ -1074,6 +1173,62 @@ describe("tools", () => {
       expect(projectState.data.projects[0]?.activeConnection.available).toBe(
         false,
       );
+    }
+
+    const build = await buildTool!.execute(
+      { project: "Machine" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(build.ok).toBe(true);
+    if (build.ok) {
+      expect(build.data.status).toBe("unavailable");
+      expect(build.data.safetyBoundary.activateConfiguration).toBe(false);
+    }
+
+    const plcBuild = await plcBuildTool!.execute(
+      {},
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(plcBuild.ok).toBe(true);
+    if (plcBuild.ok) {
+      expect(plcBuild.data.scope).toBe("plcProject");
+    }
+
+    const buildErrors = await buildErrorsTool!.execute(
+      { limit: 5 },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(buildErrors.ok).toBe(true);
+    if (buildErrors.ok) {
+      expect(buildErrors.data.count).toBe(0);
+      expect(buildErrors.data.build.status).toBe("unavailable");
+    }
+
+    const errorList = await errorListTool!.execute(
+      { severity: ["error", "warning"] },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(errorList.ok).toBe(true);
+    if (errorList.ok) {
+      expect(errorList.data.available).toBe(false);
+    }
+
+    const errorContext = await errorContextTool!.execute(
+      { error: "err://missing" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(errorContext.ok).toBe(true);
+    if (errorContext.ok) {
+      expect(errorContext.data.available).toBe(false);
+    }
+
+    const outputRead = await outputReadTool!.execute(
+      { channel: "build" },
+      { runtime: createRuntimeStub() as never },
+    );
+    expect(outputRead.ok).toBe(true);
+    if (outputRead.ok) {
+      expect(outputRead.data.channel).toBe("build");
     }
 
     const treeSearch = await treeSearchTool!.execute(

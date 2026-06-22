@@ -42,11 +42,18 @@ import type {
 } from "./diagnostics.js";
 import {
   EngineeringService,
+  type EngineeringBuildAndGetErrorsResult,
+  type EngineeringBuildResult,
+  type EngineeringErrorContextResult,
+  type EngineeringErrorListResult,
   type EngineeringListProjectsResult,
   type EngineeringListWorkbenchesResult,
   type EngineeringIoDescribeDeviceResult,
   type EngineeringIoDescribeTerminalResult,
   type EngineeringIoListTopologyResult,
+  type EngineeringIssueSeverity,
+  type EngineeringOutputChannel,
+  type EngineeringOutputReadResult,
   type EngineeringProjectStateResult,
   type EngineeringPlcDescribeLibraryResult,
   type EngineeringPlcDescribePouResult,
@@ -116,6 +123,40 @@ export interface TcListProjectsInput {
 
 export interface TcProjectStateInput {
   readonly project?: string | undefined;
+}
+
+export interface TcBuildProjectInput {
+  readonly project?: string | undefined;
+  readonly target?: string | undefined;
+  readonly timeoutMs?: number | undefined;
+}
+
+export interface PlcBuildProjectInput extends TcBuildProjectInput {}
+
+export interface TcBuildAndGetErrorsInput extends TcBuildProjectInput {
+  readonly limit?: number | undefined;
+}
+
+export interface TcErrorListInput {
+  readonly project?: string | undefined;
+  readonly severity?: EngineeringIssueSeverity | readonly EngineeringIssueSeverity[] | undefined;
+  readonly limit?: number | undefined;
+}
+
+export interface TcErrorContextInput {
+  readonly error?: string | undefined;
+  readonly file?: string | undefined;
+  readonly line?: number | undefined;
+  readonly project?: string | undefined;
+  readonly contextLines?: number | undefined;
+}
+
+export interface TcOutputReadInput {
+  readonly project?: string | undefined;
+  readonly channel?: EngineeringOutputChannel | undefined;
+  readonly contains?: string | undefined;
+  readonly limitBytes?: number | undefined;
+  readonly tailLines?: number | undefined;
 }
 
 export interface TcTreeReadInput {
@@ -235,6 +276,14 @@ export interface TwinCatAdsOperations {
   tcListWorkbenches(): EngineeringListWorkbenchesResult;
   tcListProjects(input?: TcListProjectsInput): EngineeringListProjectsResult;
   tcProjectState(input?: TcProjectStateInput): EngineeringProjectStateResult;
+  tcBuildProject(input?: TcBuildProjectInput): EngineeringBuildResult;
+  plcBuildProject(input?: PlcBuildProjectInput): EngineeringBuildResult;
+  tcBuildAndGetErrors(
+    input?: TcBuildAndGetErrorsInput,
+  ): EngineeringBuildAndGetErrorsResult;
+  tcErrorList(input?: TcErrorListInput): EngineeringErrorListResult;
+  tcErrorContext(input: TcErrorContextInput): EngineeringErrorContextResult;
+  tcOutputRead(input?: TcOutputReadInput): EngineeringOutputReadResult;
   tcTreeRead(input: TcTreeReadInput): EngineeringTreeReadResult;
   tcTreeSearch(input?: TcTreeSearchInput): EngineeringTreeSearchResult;
   tcTreeDescribeItem(
@@ -326,6 +375,13 @@ export function createTwinCatAdsRuntime(
     tcListWorkbenches: () => engineering.listWorkbenches(),
     tcListProjects: (input = {}) => engineering.listProjects(input),
     tcProjectState: (input = {}) => engineering.projectState(input),
+    tcBuildProject: (input = {}) => engineering.tcBuildProject(input),
+    plcBuildProject: (input = {}) => engineering.plcBuildProject(input),
+    tcBuildAndGetErrors: (input = {}) =>
+      engineering.tcBuildAndGetErrors(input),
+    tcErrorList: (input = {}) => engineering.tcErrorList(input),
+    tcErrorContext: (input) => engineering.tcErrorContext(input),
+    tcOutputRead: (input = {}) => engineering.tcOutputRead(input),
     tcTreeRead: (input) => engineering.treeRead(input),
     tcTreeSearch: (input = {}) => engineering.treeSearch(input),
     tcTreeDescribeItem: (input) => engineering.treeDescribeItem(input),

@@ -380,4 +380,93 @@ describe("engineering project context", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("reports bounded unavailable build and engineering error surfaces", () => {
+    const root = mkdtempSync(join(tmpdir(), "twincat-engineering-build-"));
+    const projectPath = join(root, "Machine.tsproj");
+    writeFileSync(
+      projectPath,
+      [
+        '<Project Name="Machine">',
+        "  <ItemGroup>",
+        '    <TcSmProject Include="Machine.xti" />',
+        "  </ItemGroup>",
+        "</Project>",
+      ].join("\n"),
+    );
+
+    const engineering = new EngineeringService({
+      enabled: true,
+      backend: "configuredProjectFiles",
+      workbenchName: "Machine",
+      projectFiles: [{ path: projectPath, type: "sysManager" }],
+    });
+
+    try {
+      const build = engineering.tcBuildProject({ project: "Machine" });
+      expect(build).toMatchObject({
+        scope: "twinCatProject",
+        status: "unavailable",
+        available: false,
+        project: { name: "Machine" },
+        safetyBoundary: {
+          activateConfiguration: false,
+          download: false,
+          login: false,
+          run: false,
+          stop: false,
+        },
+      });
+      expect(build.output.text).toContain("No Activate Configuration");
+
+      const buildAndErrors = engineering.tcBuildAndGetErrors({ limit: 5 });
+      expect(buildAndErrors).toMatchObject({
+        build: { status: "unavailable" },
+        errors: [],
+        warnings: [],
+        count: 0,
+        truncated: false,
+      });
+
+      const errors = engineering.tcErrorList({
+        severity: ["error", "warning"],
+        limit: 5,
+      });
+      expect(errors).toMatchObject({
+        available: false,
+        issues: [],
+        count: 0,
+        truncated: false,
+      });
+
+      const output = engineering.tcOutputRead({
+        channel: "build",
+        limitBytes: 1024,
+      });
+      expect(output).toMatchObject({
+        available: false,
+        channel: "build",
+        bytesRead: 0,
+        truncated: false,
+      });
+
+      const context = engineering.tcErrorContext({
+        file: projectPath,
+        line: 2,
+        contextLines: 1,
+      });
+      expect(context).toMatchObject({
+        available: true,
+        file: projectPath,
+        line: 2,
+        context: {
+          startLine: 1,
+          endLine: 3,
+        },
+      });
+      expect(context.context?.text).toContain("<ItemGroup>");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
