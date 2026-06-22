@@ -4,7 +4,15 @@ import {
   readdirSync,
   statSync,
 } from "node:fs";
-import { basename, dirname, extname, isAbsolute, join, normalize } from "node:path";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  normalize,
+  relative,
+} from "node:path";
 
 import { XMLParser } from "fast-xml-parser";
 
@@ -646,7 +654,15 @@ function normalizeProjectPath(path: string, basePath?: string): string {
     return normalize(path);
   }
 
-  return normalize(join(basePath ?? process.cwd(), path));
+  return normalize(join(basePath ?? process.cwd(), ...path.split(/[\\/]+/)));
+}
+
+function isSameOrInsideDirectory(path: string, directory: string): boolean {
+  const relativePath = relative(normalize(directory), normalize(path));
+  return (
+    relativePath.length === 0 ||
+    (!relativePath.startsWith("..") && !isAbsolute(relativePath))
+  );
 }
 
 function encodedQuery(params: Record<string, string>): string {
@@ -2375,12 +2391,10 @@ export class EngineeringService {
     for (const project of projects) {
       const projectDirectory = dirname(project.path);
       const resolved = normalizeProjectPath(file, projectDirectory);
-      const normalizedProjectDirectory = `${normalize(projectDirectory).toLowerCase()}\\`;
-      const normalizedResolved = normalize(resolved).toLowerCase();
 
       if (
-        normalizedResolved === project.path.toLowerCase() ||
-        normalizedResolved.startsWith(normalizedProjectDirectory)
+        normalize(resolved) === normalize(project.path) ||
+        isSameOrInsideDirectory(resolved, projectDirectory)
       ) {
         return resolved;
       }
@@ -2397,13 +2411,8 @@ export class EngineeringService {
     for (const project of projects) {
       const projectDirectory = dirname(project.path);
       const resolved = normalizeProjectPath(folder, projectDirectory);
-      const normalizedProjectDirectory = normalize(projectDirectory).toLowerCase();
-      const normalizedResolved = normalize(resolved).toLowerCase();
 
-      if (
-        normalizedResolved === normalizedProjectDirectory ||
-        normalizedResolved.startsWith(`${normalizedProjectDirectory}\\`)
-      ) {
+      if (isSameOrInsideDirectory(resolved, projectDirectory)) {
         return resolved;
       }
     }
