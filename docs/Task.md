@@ -99,6 +99,35 @@ historischer Kontext erhalten.
 - Tests fuer unavailable/live-capability-Faelle, gemockte Error-List-Eintraege
   und Safety-Boundary-Ausgaben ergaenzen.
 
+### 30. Beckhoff Information System als optionales Dokumentations-Backend indexieren `[Open]`
+
+- Lokales TwinCAT 3 Information System als optionale Kontextquelle evaluieren,
+  getrennt von Skills, ADS-Runtime und XAE-Engineering-Backends.
+- Installationsorte und Formate des Microsoft Help Viewer / Beckhoff Information
+  System Katalogs fuer TwinCAT 3 pruefen.
+- Rechtliche und praktische Grenze festhalten: Beckhoff-Dokumentation nicht im
+  npm-Paket mitliefern, sondern lokal installierte oder online erreichbare
+  Quellen referenzieren und nur begrenzte Snippets ausgeben.
+- Lokalen Suchindex planen, z. B. SQLite FTS oder vergleichbare kompakte
+  Volltextsuche im User-Cache.
+- Docs-Tools entwerfen:
+  - `tc_docs_status` fuer Verfuegbarkeit, Sprache, Quelle und Indexstand.
+  - `tc_docs_search` fuer begrenzte Treffer mit Titel, Snippet und Quelle.
+  - `tc_docs_read` fuer gezieltes, limitiertes Lesen eines Artikels.
+  - `tc_docs_lookup_symbol` fuer PLC-/Library-/Funktionsbaustein-Kontext.
+  - `tc_docs_lookup_error` fuer Fehlercodes, Compiler- oder Runtime-Meldungen.
+- Quellenangaben stabil halten: lokale Help-Viewer-ID, Infosys-URL,
+  Produktbereich, Sprache und Aktualisierungsstand.
+- Agenten-Workflow dokumentieren: Skill gibt Arbeitsweise vor, Docs-Backend
+  liefert offiziellen Beckhoff-Kontext zu Symbolen, Libraries, Klemmen,
+  Fehlercodes, Automation-Interface-APIs und TwinCAT-Konzepten.
+- Online-Fallback auf `infosys.beckhoff.com` nur optional und konfigurierbar
+  vorsehen, damit Offline- oder abgeschottete Engineering-Systeme sauber
+  funktionieren.
+- Tests mit kleinem synthetischem Doku-Korpus planen, damit Indexierung,
+  Ranking, Snippet-Limits und Quellenangaben ohne Beckhoff-Installation
+  pruefbar bleiben.
+
 ## Phase 3: XAE-Engineering-, Projekt- und Code-Kontext
 
 Diese Phase orientiert sich an den CoAgent-Rechercheergebnissen, bleibt aber
