@@ -29,6 +29,15 @@ asset SHA-256 before extraction. Assistant rebuilds the provider from that
 exact source and pins its own resulting module bytes. No TwinCAT/VS vendor
 assemblies or NuGet packages are distributed with the helper.
 
+The runtime dependency audit is not clean. In particular, retained Zod 3 is
+affected by GHSA-mrhx-c7xc-m3w5, an availability issue when validating oversized
+typed collections. The nine live-tool inputs have no array collections, but
+ordinary stdio tools do, and `.max()` does not fully mitigate the advisory.
+SDK stdin limits are separate from the smaller authenticated provider frame
+limits. A Zod major migration is deferred, not claimed fixed or universally
+unreachable. Consumers should use trusted local clients and retain this risk
+in their release assessment.
+
 The `twincat-mcp` monorepo uses a coordinated lockstep release flow for the
 root project, `twincat-mcp-core`, `pi-twincat-ads`, and `twincat-mcp`.
 
