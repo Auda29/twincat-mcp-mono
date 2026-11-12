@@ -33,7 +33,12 @@ function setup(respond?: (request: Record<string, unknown>) => unknown) {
 }
 
 describe("explicit live engineering tools", () => {
-  it.each(["tc_build_project", "plc_build_project", "tc_build_and_get_errors"])("submits %s exactly once without polling", async (name) => {
+  it("does not substitute a TwinCAT project build for a PLC-only build", async () => {
+    const { dispatch, tool } = setup();
+    expect(await tool("plc_build_project").execute({})).toMatchObject({ status: "unsupported" });
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+  it.each(["tc_build_project", "tc_build_and_get_errors"])("submits %s exactly once without polling", async (name) => {
     const { dispatch, tool } = setup();
     const response = await tool(name).execute({}) as Record<string, unknown>;
     expect(response.status).toBe("accepted");
@@ -41,6 +46,7 @@ describe("explicit live engineering tools", () => {
     const request = JSON.parse(dispatch.mock.calls[0]![0]);
     expect(request).toMatchObject({ protocolVersion: 1, sessionId: context.sessionId, operation: "build.start", arguments: {}, expected: { idePid: 1234, projectFile: context.projectFile } });
     expect(request.operationId).toBe(response.operationId);
+    expect(Date.parse(request.arguments.approvalExpiresUtc)).toBeGreaterThan(Date.now());
     expect(request.operationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(tool(name).annotations?.idempotentHint).toBe(false);
   });
