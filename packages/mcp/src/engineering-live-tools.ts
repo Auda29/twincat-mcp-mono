@@ -85,7 +85,7 @@ export function createLiveEngineeringToolDefinitions(
     description: "Submit a build of the host-bound PLC project after explicit native approval. Returns an operation ID immediately; query tc_operation_get, then read diagnostics or output with that targetOperationId. Does not save or change configuration.",
     inputSchema: startInput,
     annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    execute: async (input: unknown) => { startInput.parse(input); return invoke("build.start", {}); },
+    execute: async (input: unknown) => { startInput.parse(input); return invoke("build.start", { approvalExpiresUtc: new Date(Date.now() + 90_000).toISOString() }); },
   });
   const read = (name: string, title: string, operation: string, description: string, cancel = false): McpToolDefinition => ({
     name, title, description,

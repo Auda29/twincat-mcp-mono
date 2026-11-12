@@ -87,10 +87,19 @@ must identify their owning build UUID and never label unrelated IDE Error List
 entries as fresh. Results are bounded and include truncation indicators.
 
 All calls revalidate every context field immediately before accessing the IDE.
-Operation UUID reuse with different request content is refused; retries do not
-repeat an operation. Timeout or cancellation of a submitted mutation has an
+Effectful operation UUID reuse with different request content is refused; a
+bounded, non-evicting session record prevents automatic re-execution. Pure
+observational requests are not cached; repeated polls read current state and do
+not consume that budget. Timeout or cancellation of a submitted mutation has an
 `unknown` outcome until independently resolved; never automatically retry it.
 Cancellation is best effort and does not assert that an IDE operation stopped.
+
+`build.start` requires exactly one argument, `approvalExpiresUtc`, an ISO 8601
+UTC timestamp ending in `Z`, strictly in the future and no more than two minutes
+away. The provider passes that exact instant to `ApprovalRequest.ExpiresUtc`;
+the request digest includes the supplied timestamp. Parsed diagnostics include
+`navigationAvailable: false` because no exact project-item and source-baseline
+attestation has yet been established. A diagnostic path is not navigation proof.
 
 `source.preview` covers one existing ST object and one section. It records
 exact verified text, identity, baseline digest and proposed digest. Apply

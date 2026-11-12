@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -104,6 +105,15 @@ namespace TwinCatMcp.Engineering.Host
                 throw new ArgumentException();
             try { ValidateContext(request["expected"] as Dictionary<string, object>, currentContext(), session); }
             catch { return Failure(json, session, operation, "conflict", "context_changed"); }
+            var requestedName = request["operation"] as string;
+            // Observations never consume the non-evicting mutation replay budget.
+            // Their UUIDs are not cached: repeating a poll obtains a fresh view.
+            if (requestedName == "session.ping" || requestedName == "session.describe" ||
+                requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read")
+            {
+                try { return DispatchValidated(requestJson, request, json, session, operation); }
+                catch { return Failure(json, session, operation, "unknown", "dispatch_failed"); }
+            }
             string fingerprint = Hash(requestJson);
             Tuple<string, string> previousRequest;
             if (requests.TryGetValue(operation, out previousRequest))
@@ -154,6 +164,13 @@ namespace TwinCatMcp.Engineering.Host
                             capabilities = new { build = "conditional", diagnostics = "conditional", output = "conditional", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
                 if (name == "build.start")
                 {
+                    DateTimeOffset expires;
+                    var expiresText = args != null && args.ContainsKey("approvalExpiresUtc") ? args["approvalExpiresUtc"] as string : null;
+                    if (args == null || args.Count != 1 || string.IsNullOrEmpty(expiresText) ||
+                        !System.Text.RegularExpressions.Regex.IsMatch(expiresText, @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$") ||
+                        !DateTimeOffset.TryParse(expiresText, CultureInfo.InvariantCulture, DateTimeStyles.None, out expires) || expires.Offset != TimeSpan.Zero ||
+                        expires.UtcDateTime <= DateTime.UtcNow || expires.UtcDateTime > DateTime.UtcNow.AddMinutes(2))
+                        throw new NativeBuildException("refused", "invalid_approval_expiry");
                     var fingerprint = Hash(requestJson);
                     string previous;
                     if (submitted.TryGetValue(operation, out previous))
@@ -166,7 +183,7 @@ namespace TwinCatMcp.Engineering.Host
                         if (submitted.Count >= 128) throw new NativeBuildException("refused", "operation_limit");
                         if (builds == null) builds = new NativeBuildService(dte, dirty);
                         var requestApproval = new ApprovalRequest(session, operation, name, current, current.ProjectFile, null, null, null,
-                            DateTime.UtcNow.AddMinutes(2), fingerprint, null, null);
+                            expires.UtcDateTime, fingerprint, null, null);
                         // Mark before submission; no retry after an uncertain outcome.
                         submitted.Add(operation, fingerprint);
                         snapshot = builds.Start(operation, current.SolutionFile, current.ProjectFile,
@@ -186,7 +203,10 @@ namespace TwinCatMcp.Engineering.Host
                         provenance = Provenance(snapshot.BuildOperationId),
                         result = new { buildOperationId = snapshot.BuildOperationId, configuration = snapshot.Configuration, platform = snapshot.Platform,
                             cancellationRequested = snapshot.CancellationRequested, outputAvailable = snapshot.OutputAvailable, outputTruncated = snapshot.OutputTruncated,
-                            diagnosticsTruncated = snapshot.DiagnosticsTruncated }, output = snapshot.Output, diagnostics = snapshot.Diagnostics });
+                            diagnosticsTruncated = snapshot.DiagnosticsTruncated }, output = snapshot.Output,
+                        diagnostics = snapshot.Diagnostics.Select(d => new { file = d.File, severity = d.Severity, message = d.Message,
+                            code = d.Code, line = d.Line, column = d.Column, navigationAvailable = false,
+                            navigationReason = "No verified project source item and baseline are available." }).ToArray() });
             }
             catch (NativeBuildException e)
             {
