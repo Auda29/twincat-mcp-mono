@@ -1,5 +1,34 @@
 # Release Flow
 
+## Engineering integration release 0.5.3
+
+The `engineering-v0.5.3` GitHub release distributes an assembled runtime,
+package tarballs, provider source archive and an integrity receipt. This tag
+does not trigger the separate `core-v*` npm publication chain. Package versions
+remain lockstep; a GitHub artifact release does not claim npm publication.
+
+The release host uses factory7 `CreateWithHostAccess` with a null text-buffer
+accessor and no section accessor. It must also deny `source.*` before provider
+dispatch and keep the source UI hidden. The provider advertises unsupported
+source capabilities and denies every source operation in this mode. Its Node
+child exposes nine session/build/diagnostic tools. The previous fifteen-tool
+development catalog, editor factories and all source implementation remain
+in source control, behind explicit trusted in-code development opt-in.
+
+CI runs locked Node/workspace checks and Windows .NET Framework 4.7.2 provider
+build/fixtures. These checks and independent code review do not establish live
+XAE acceptance. Normal-ST writes remain unsupported even in development until
+an exact attached-section atomic transaction and synchronization/failure
+contract is proven. The discovered searchable-text MEF bridge does not provide
+that contract. Journals are session-memory only and no global IDE cancellation
+is performed. Runtime, PLC, deployment and operator actions remain separate.
+
+Run `scripts/Build-EngineeringRelease.ps1` from a clean release commit to
+produce the receipt and archives. Consumers must verify release commit and
+asset SHA-256 before extraction. Assistant rebuilds the provider from that
+exact source and pins its own resulting module bytes. No TwinCAT/VS vendor
+assemblies or NuGet packages are distributed with the helper.
+
 The `twincat-mcp` monorepo uses a coordinated lockstep release flow for the
 root project, `twincat-mcp-core`, `pi-twincat-ads`, and `twincat-mcp`.
 
