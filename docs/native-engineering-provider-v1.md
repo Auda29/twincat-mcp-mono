@@ -31,8 +31,12 @@ public static class EngineeringProviderFactory {
 
 `HostContext` contains `sessionId` (UUID), `idePid` (integer),
 `ideStartedUtc` (UTC ISO 8601), canonical absolute `solutionFile` and
-`projectFile`, and monotonically changing `contextEpoch` (string). The host
-invalidates the session on rebinding, solution close or project replacement.
+`projectFile`, and monotonically changing `contextEpoch` (string). The session
+is a separate engineering UUID, not a chat ID. The host invalidates it on
+rebinding, solution close or project replacement, even on same-path reopen.
+The C# `HostContext` has get-only PascalCase properties and constructor
+`(Guid sessionId, int idePid, DateTime ideStartedUtc, string solutionFile,
+string projectFile, string contextEpoch)`.
 `authoritativeDirty` returns true, false, or null (unknown); unknown is never
 clean. The host supplies the IDE UI synchronization context. Provider dispatch
 must not block the UI waiting for build completion.
@@ -40,8 +44,17 @@ must not block the UI waiting for build completion.
 The host creates and keeps the random capability secret out of JSON and model
 context, authenticates IPC before dispatch, and never accepts a model-selected
 session or project. `consumeApproval` is host-owned, single-use and atomic;
-its `ApprovalRequest` binds session, operation UUID, operation, exact context
-and, for source mutation, the baseline and proposed content digests. Approval
+its `ApprovalRequest` binds session, operation UUID, operation, exact context,
+the exact target object/member, section, preview or journal ID, expiry, canonical
+action/request digest and, for source mutation, baseline and proposed content
+digests. `ApprovalRequest` has get-only PascalCase properties `SessionId` and
+`OperationId` (Guid), `Operation` (string), `Expected` (HostContext),
+`TargetObjectId`, `Section`, `PreviewId`, `JournalId` (string), `ExpiresUtc`
+(DateTime), `CanonicalRequestDigest`, `BaselineDigest`, and `ProposedDigest`
+(string), in that constructor order. Consume immediately before the guarded
+action on the IDE thread. `CanonicalRequestDigest` is lowercase SHA-256 of the
+exact UTF-8 request JSON bytes before parsing. Duplicate keys at any depth are
+rejected. Approval
 must originate in native user action. A callback refusal fails the request.
 Approval tokens and capability secrets must not be logged or returned.
 
@@ -65,7 +78,9 @@ Operations are `build.start`, `operation.get`, `operation.cancel`,
 `diagnostics.read`, `output.read`, `source.read`, `source.preview`,
 `source.apply`, and `source.rollback`. `build.start`, `source.apply`, and
 `source.rollback` require explicit native approval. Read calls cannot trigger
-builds or mutation. Operations may be unsupported; a missing implementation
+builds or mutation. `operation.get` and `operation.cancel` use a distinct
+`arguments.targetOperationId` UUID; cancel is not an Analysis read operation.
+Operations may be unsupported; a missing implementation
 must return `unsupported`, not simulated success. A build returns `accepted`
 and is subsequently queried by its operation UUID. Diagnostics and output
 must identify their owning build UUID and never label unrelated IDE Error List
@@ -87,3 +102,25 @@ ambiguous identity or unsupported editor semantics must refuse mutation.
 Create, delete, multiple files, hardware and Safety changes are out of scope.
 No operation implicitly saves, switches configuration/platform, activates,
 downloads, logs in, runs, stops or forces values.
+
+## Authenticated pipe framing
+
+The host provisions a fresh 32-byte secret to its owned Node child through
+stdin only. Each connection uses one dispatch and a 30-second total deadline.
+Frames are strict, exact-key UTF-8 JSON objects terminated by LF. Hex strings
+are lowercase; nonces are 32 random bytes. Server hello is
+`{protocolVersion:1,sessionId,serverNonce}`; client hello is
+`{clientNonce,proof}`; server acknowledgement is `{proof}`. The HMAC-SHA256
+key is the raw secret; client proof signs UTF-8
+`TCMCP1\nclient\n<sessionId>\n<serverNonce>\n<clientNonce>`, and the server
+proof uses `server` in place of `client`.
+
+After mutual proof, the client sends exactly
+`{protocolVersion:1,request:<provider JSON string>,proof}`. Its proof signs
+the same transcript with domain `request` followed by LF and lowercase SHA-256
+of the UTF-8 request string. The response is exactly
+`{response:<provider JSON string>,proof}`, signed in the same way with domain
+`response` and the response string's digest. Proof comparisons are constant
+time. No secret is included in frames. Encoded request, response and handshake
+frames are capped at 256 KiB, 512 KiB and 4 KiB respectively. Authentication
+failure closes the connection; no dispatch is retried after a timeout.
