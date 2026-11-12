@@ -52,14 +52,16 @@ try {
         $stage = Join-Path $output 'runtime-stage'
         New-Item -ItemType Directory -Path $stage | Out-Null
         Copy-Item package.json, package-lock.json, LICENSE -Destination $stage
-        foreach ($package in @('core', 'mcp', 'pi')) {
+        foreach ($package in @('core', 'mcp')) {
             $destination = Join-Path $stage "packages/$package"
             New-Item -ItemType Directory -Path $destination -Force | Out-Null
             Copy-Item "packages/$package/package.json", "packages/$package/README.md", "packages/$package/LICENSE" -Destination $destination
             Copy-Item "packages/$package/dist" -Destination $destination -Recurse
         }
         Push-Location $stage
-        try { Invoke-Checked npm @('ci', '--omit=dev', '--ignore-scripts') } finally { Pop-Location }
+        try { Invoke-Checked npm @('ci', '--workspace', 'twincat-mcp-core', '--workspace', 'twincat-mcp', '--include-workspace-root=false', '--omit=dev', '--ignore-scripts') } finally { Pop-Location }
+        $vendorBinaries = @(Get-ChildItem -LiteralPath (Join-Path $stage 'node_modules') -Recurse -File | Where-Object { $_.Extension -in @('.node', '.dll', '.exe') })
+        if ($vendorBinaries.Count -gt 0) { throw "Runtime dependencies contain native binaries: $($vendorBinaries.FullName -join ', ')" }
         $hostDestination = Join-Path $stage 'host/x86'
         New-Item -ItemType Directory -Path $hostDestination -Force | Out-Null
         Copy-Item $dll -Destination $hostDestination
