@@ -335,6 +335,10 @@ describe("engineering project context", () => {
       ]);
 
       const main = engineering.plcReadPou({ pou: "MAIN" });
+      expect(main.pou.provenance).toEqual({
+        source: "configuredProjectFile",
+        editorState: "unknown",
+      });
       expect(main.pou.declaration).toContain("PROGRAM MAIN");
       expect(main.pou.implementation).toContain("fbValve.Open");
 

@@ -216,6 +216,11 @@ export interface EngineeringPlcPouSummary {
   readonly kind: EngineeringPlcObjectKind;
   readonly path: string;
   readonly sourceFile: string;
+  /** File-backed snapshot; the live editor buffer has not been inspected. */
+  readonly provenance: {
+    readonly source: "configuredProjectFile";
+    readonly editorState: "unknown";
+  };
   readonly project: EngineeringProjectSummary;
 }
 
@@ -2791,6 +2796,7 @@ export class EngineeringService {
         kind,
         path: `/${project.name}/${qualifiedName}`,
         sourceFile,
+        provenance: { source: "configuredProjectFile", editorState: "unknown" },
         project,
         declaration,
         implementation,
@@ -2804,7 +2810,7 @@ export class EngineeringService {
     projectFilter?: string,
   ): EngineeringPlcPouContent {
     const normalizedPou = pou.trim().toLowerCase();
-    const object = this.buildPlcObjects(projectFilter).find(
+    const matches = this.buildPlcObjects(projectFilter).filter(
       (entry) =>
         entry.id.toLowerCase() === normalizedPou ||
         entry.name.toLowerCase() === normalizedPou ||
@@ -2812,11 +2818,13 @@ export class EngineeringService {
         entry.sourceFile.toLowerCase() === normalizedPou,
     );
 
-    if (object === undefined) {
+    if (matches.length === 0) {
       throw new Error(`PLC object "${pou}" was not found.`);
     }
-
-    return object;
+    if (matches.length !== 1) {
+      throw new Error(`PLC object "${pou}" is ambiguous; use its exact id.`);
+    }
+    return matches[0]!;
   }
 
   private toPlcPouSummary(
@@ -2830,6 +2838,7 @@ export class EngineeringService {
       kind: pou.kind,
       path: pou.path,
       sourceFile: pou.sourceFile,
+      provenance: pou.provenance,
       project: pou.project,
     };
   }
