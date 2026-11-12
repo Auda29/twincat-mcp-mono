@@ -33,6 +33,20 @@ function setup(respond?: (request: Record<string, unknown>) => unknown) {
 }
 
 describe("explicit live engineering tools", () => {
+  it("returns association evidence without treating it as a build result", async () => {
+    const { dispatch, tool } = setup((request) => ({
+      protocolVersion: 1, sessionId: request.sessionId, operationId: request.operationId,
+      status: "succeeded", provenance: { source: "unknown", dirtyState: "unknown", buildOperationId: null },
+      result: { solutionFile: context.solutionFile, plcProjectFile: context.projectFile,
+        twinCatProjectFile: "C:\\fixture\\a.tsproj", associationCount: 1, owningTwinCatPlcChildCount: 2,
+        buildScopeStatus: "unknown", captureKind: "automationSnapshot", editorState: "unknown", dirtyState: "unknown" },
+    }));
+    expect(await tool("tc_project_association").execute({})).toMatchObject({
+      status: "succeeded", result: { associationCount: 1, owningTwinCatPlcChildCount: 2, buildScopeStatus: "unknown" },
+    });
+    expect(JSON.parse(dispatch.mock.calls[0]![0])).toMatchObject({ operation: "project.association", arguments: {} });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
   it("does not substitute a TwinCAT project build for a PLC-only build", async () => {
     const { dispatch, tool } = setup();
     expect(await tool("plc_build_project").execute({})).toMatchObject({ status: "unsupported" });

@@ -22,6 +22,9 @@ internal static class ProviderChecks
                 return (Dictionary<string, object>)json.DeserializeObject(provider.DispatchAsync(request, CancellationToken.None).GetAwaiter().GetResult());
             };
             for (int i = 0; i < 300; i++) Require((string)call(Guid.NewGuid(), "session.ping", new { })["status"] == "succeeded", "read-only polls must not fill replay budget");
+            var description = call(Guid.NewGuid(), "session.describe", new { });
+            var capabilities = (Dictionary<string, object>)((Dictionary<string, object>)description["result"])["capabilities"];
+            Require((string)capabilities["plcBuild"] == "unsupported" && (string)capabilities["sourceRead"] == "unsupported", "capabilities are honest");
             var expired = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddMinutes(-1).ToString("o") });
             Require((string)expired["status"] == "refused" && (string)expired["error"] == "invalid_approval_expiry", "expired approvals rejected");
             var distant = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddMinutes(4).ToString("o") });
@@ -31,6 +34,6 @@ internal static class ProviderChecks
             var valid = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddSeconds(90).ToString("o") });
             Require((string)valid["status"] == "unsupported" && (string)valid["error"] == "unverified_build_scope", "unverified build scope remains disabled");
         }
-        Console.WriteLine("Provider checks passed: 304"); return 0;
+        Console.WriteLine("Provider checks passed: 305"); return 0;
     }
 }

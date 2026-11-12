@@ -66,8 +66,9 @@ export function createLiveEngineeringToolDefinitions(
       if ((resultBuildId != null && resultBuildId !== target) ||
           (provenanceBuildId != null && provenanceBuildId !== target)) throw new Error("Build ownership mismatch");
       const hasEvidence = response.output != null || (response.diagnostics?.length ?? 0) > 0;
-      if (operation === "session.describe" && hasEvidence) throw new Error("Unexpected build evidence");
-      if (operation !== "session.describe" && (hasEvidence || ["accepted", "running", "succeeded", "failed", "cancelled"].includes(response.status)) &&
+      const discovery = operation === "session.describe" || operation === "project.association";
+      if (discovery && hasEvidence) throw new Error("Unexpected build evidence");
+      if (!discovery && (hasEvidence || ["accepted", "running", "succeeded", "failed", "cancelled"].includes(response.status)) &&
           provenanceBuildId !== target) throw new Error("Missing build ownership");
       return response;
     } catch {
@@ -75,7 +76,9 @@ export function createLiveEngineeringToolDefinitions(
       return {
         protocolVersion: 1, sessionId, operationId, status: "unknown",
         provenance: { observedContext: context, observedAt: new Date().toISOString(), source: "unknown", dirtyState: "unknown", buildOperationId: target },
-        error: "Host outcome could not be verified. Query this build operation before taking further action; do not automatically retry submission.",
+        error: operation === "session.describe" || operation === "project.association"
+          ? "Host observation could not be verified."
+          : "Host outcome could not be verified. Query this build operation before taking further action; do not automatically retry submission.",
       };
     }
   };
@@ -101,6 +104,10 @@ export function createLiveEngineeringToolDefinitions(
       description: "Describe the bound live engineering session and provider capabilities without starting a build.",
       inputSchema: startInput, annotations: { readOnlyHint: true, openWorldHint: false },
       execute: async (input: unknown) => { startInput.parse(input); return invoke("session.describe", {}); } },
+    { name: "tc_project_association", title: "TwinCAT Project Association",
+      description: "Read the unique association between the bound PLC project and its owning TwinCAT project. This does not build or change the project.",
+      inputSchema: startInput, annotations: { readOnlyHint: true, openWorldHint: false },
+      execute: async (input: unknown) => { startInput.parse(input); return invoke("project.association", {}); } },
     build("tc_build_project", "TwinCAT Live Build Project"),
     { name: "plc_build_project", title: "PLC Live Build Project",
       description: "A separately scoped PLC build is unavailable until the host can verify a PLC-specific command.",

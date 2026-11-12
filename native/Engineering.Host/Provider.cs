@@ -109,7 +109,7 @@ namespace TwinCatMcp.Engineering.Host
             // Observations never consume the non-evicting mutation replay budget.
             // Their UUIDs are not cached: repeating a poll obtains a fresh view.
             if (requestedName == "session.ping" || requestedName == "session.describe" ||
-                requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read")
+                requestedName == "project.association" || requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read")
             {
                 try { return DispatchValidated(requestJson, request, json, session, operation); }
                 catch { return Failure(json, session, operation, "unknown", "dispatch_failed"); }
@@ -161,7 +161,19 @@ namespace TwinCatMcp.Engineering.Host
                 if (name == "session.ping" || name == "session.describe")
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = "succeeded",
                         provenance = Provenance(null), result = new { contextValidated = true,
-                            capabilities = new { build = "unsupported", plcBuild = "unsupported", diagnostics = "unsupported", output = "unsupported", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
+                            capabilities = new { projectAssociation = "conditional", build = "unsupported", plcBuild = "unsupported", diagnostics = "unsupported", output = "unsupported", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
+                if (name == "project.association")
+                {
+                    if (args == null || args.Count != 0) throw new PlcProjectAssociationException("refused", "invalid_association_arguments");
+                    var association = new PlcProjectAssociationService(dte).Resolve(current.SolutionFile, current.ProjectFile,
+                        () => ValidateContext(expected, currentContext(), session));
+                    return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"),
+                        status = association.Status, provenance = Provenance(null), error = association.ErrorCode,
+                        result = new { solutionFile = association.SolutionFile, plcProjectFile = association.PlcProjectFile,
+                            twinCatProjectFile = association.TwinCatProjectFile, associationCount = association.AssociationCount,
+                            owningTwinCatPlcChildCount = association.OwningTwinCatPlcChildCount, buildScopeStatus = association.BuildScopeStatus,
+                            captureKind = association.CaptureKind, editorState = association.EditorState, dirtyState = association.DirtyState } });
+                }
                 if (name == "build.start")
                 {
                     DateTimeOffset expires;
@@ -194,6 +206,10 @@ namespace TwinCatMcp.Engineering.Host
             {
                 return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = e.Status,
                     provenance = Provenance(null), error = e.Code });
+            }
+            catch (PlcProjectAssociationException e)
+            {
+                return Failure(json, session, operation, e.Status, e.Code);
             }
             return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString(), operationId = operation.ToString(),
                 status = "unsupported", provenance = Provenance(null),

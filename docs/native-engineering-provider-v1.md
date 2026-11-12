@@ -84,7 +84,8 @@ includes the observed context, observation time and source (`liveBuffer`,
 `savedFile`, or `unknown`), plus dirty state (`clean`, `dirty`, or `unknown`).
 Errors are sanitized and do not expose capability or approval material.
 
-Operations are `build.start`, `operation.get`, `operation.cancel`,
+Operations include `session.ping`, `session.describe`, `project.association`,
+`build.start`, `operation.get`, `operation.cancel`,
 `diagnostics.read`, `output.read`, `source.read`, `source.preview`,
 `source.apply`, and `source.rollback`. `build.start`, `source.apply`, and
 `source.rollback` require explicit native approval. Read calls cannot trigger
@@ -110,6 +111,18 @@ away. The provider passes that exact instant to `ApprovalRequest.ExpiresUtc`;
 the request digest includes the supplied timestamp. Parsed diagnostics include
 `navigationAvailable: false` because no exact project-item and source-baseline
 attestation has yet been established. A diagnostic path is not navigation proof.
+
+`project.association` takes empty `arguments` and observes the injected DTE
+solution. It reports `solutionFile`, `plcProjectFile`, `twinCatProjectFile`
+(only for a unique match), `associationCount`, `owningTwinCatPlcChildCount`,
+`buildScopeStatus`, `captureKind`, `editorState`, and `dirtyState`.
+The child count covers direct `TIPC` children of the unique owner. It does not
+describe dependencies or attest build scope; `buildScopeStatus` is `unknown`.
+Only the unnamespaced `TreeItem/PlcDef/ProjectPath` XML shape is supported.
+An absent, ambiguous, relative or unverifiable mapping fails
+closed. This observation does not authorize a build or a source edit. It is
+conditional on the host's loaded Automation Interface and remains unverified
+against a live XAE instance.
 
 `source.preview` covers one existing ST object and one section. It records
 exact verified text, identity, baseline digest and proposed digest. Apply
