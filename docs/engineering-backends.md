@@ -1,31 +1,40 @@
 # TwinCAT Engineering Backends
 
-Task 20 introduces the first read-only engineering-context layer. The stable
-backend for now is explicit project-file configuration; live XAE and Visual
-Studio integrations are reported as unavailable capabilities instead of being
-silently assumed.
+The ordinary configured-file backend reads saved project files. It does not
+inspect live editor buffers or provide build, error-list, or output access.
+Engineering 0.5.3 also includes a dedicated native host provider for an
+Assistant-owned child, with the narrower scope described below.
 
 ## Dedicated native host provider
 
 The Assistant-owned child can opt into protocol 1 through its bounded stdin
 bootstrap and authenticated local pipe. The ordinary configured-file MCP path
 does not acquire editor or build access. The helper receives the host's exact
-already-bound DTE and, optionally, an already-open RDT/MEF text-buffer accessor.
-See [the native provider contract](native-engineering-provider-v1.md).
+already-bound DTE. The published factory supplies no text-buffer accessor. See
+[the native provider contract](native-engineering-provider-v1.md).
 
-The live provider implements selective `.plcproj` compilation with explicit
-native approval and immutable configuration/platform inputs. It refuses unknown
-dirty state, platform mismatch, ambiguous association, unsafe project hooks and
-nonempty or unverifiable build dependencies. Builds are nonblocking operations;
-diagnostics and output belong to an explicit build operation. Native source
-changes have a separate approval lane, exact live XML-buffer baseline, prepared
-session journal and conflict-safe rollback for supported already-open raw
-`.TcPOU` XML buffers. Attached normal TwinCAT ST editors support verified live
-read and read-only diff preview through the scoped host accessor. Their writes
-remain unsupported pending a proven atomic transaction contract. Compiler
-navigation uses a retained source baseline and explicit native click followed
-by an exact current ErrorItem match. These implementations require host
-integration acceptance and do not constitute live-machine validation.
+The Assistant-owned authenticated child exposes nine session, build and
+diagnostic tools by default. It supports selective PLC-only `.plcproj` builds
+with explicit native approval and immutable configuration and platform inputs.
+It refuses unknown dirty state, platform mismatch, ambiguous association, unsafe
+project hooks and nonempty or unverifiable build dependencies. Builds are
+nonblocking. Diagnostics and output are retained for an explicit build operation,
+and compiler navigation requires a retained source baseline, an explicit
+native click and an exact current ErrorItem match.
+
+In the published 0.5.3 release, all new `source.*` discovery, read, preview,
+apply, rollback and journal operations are inactive. The release factory uses
+`CreateWithHostAccess` with a null text-buffer accessor, the host rejects
+`source.*`, and there is no section callback or UI. Development factories and
+the fifteen-tool development catalog remain behind trusted host APIs and an
+in-code-only catalog option. Those development paths include raw XML buffer
+changes and read-only custom ST editor
+access; they are not release capabilities. See
+[the native provider contract](native-engineering-provider-v1.md) for details.
+
+The child exposes no ADS runtime writes and no activation, download, login,
+run/stop or force actions. The provider requires host integration acceptance
+and has not been validated in a real host.
 
 ## Backend Evaluation
 
@@ -45,25 +54,21 @@ integration acceptance and do not constitute live-machine validation.
 
 ### Automation Interface
 
-- Status: planned, not implemented.
-- Reason: requires a Windows/XAE automation helper and explicit safety gating.
-- Expected use: richer SysManager tree, `tc_build_project`,
-  `plc_build_project`, `tc_build_and_get_errors`, `tc_error_list`,
-  `tc_error_context`, `tc_output_read`, and later controlled engineering write
-  operations.
+- Status: the dedicated native host helper exists for the Assistant-owned
+  child. Its released build path is selective PLC-only compilation with native
+  approval; broader live tree and source operations are not established release
+  capabilities. The configured-file backend remains separate.
 
 ### DTE / Visual Studio integration
 
-- Status: planned, not implemented.
-- Reason: depends on a live Visual Studio/TcXaeShell process and COM automation
-  availability.
-- Expected use: open solution/workbench discovery and active document context.
+- Status: the dedicated helper uses the host's already-bound DTE for its
+  released session, build and diagnostic operations. Ordinary configured-file
+  tools do not acquire active document context.
 
 ### TcXaeShell context
 
-- Status: planned, not implemented.
-- Reason: needs a live XAE host integration boundary.
-- Expected use: list currently open XAE workbenches and projects.
+- Status: the dedicated helper depends on an existing host integration. It
+  does not imply general discovery or attachment to open XAE workbenches.
 
 ### GAS / WebSocket
 
@@ -83,8 +88,9 @@ All three tools are read-only and separate from ADS runtime operations.
 
 ## Build and Error Context Tools
 
-Task 23 adds a stable, bounded engineering-build surface without assuming a
-live backend:
+The ordinary configured-file catalog has the following build/error tool names.
+Its availability and inputs differ from the dedicated nine-tool child described
+in [the MCP README](../packages/mcp/README.md#assistant-owned-bound-engineering-child):
 
 - `tc_build_project`: build a configured TwinCAT/XAE project when a live build
   backend exists.

@@ -1,5 +1,14 @@
 # Task Breakdown fuer `twincat-mcp` Monorepo
 
+> **Current status (Engineering 0.5.3):** The task descriptions and their
+> labels below are historical planning records, not a current capability list.
+> The Assistant-owned authenticated child now has nine default session, build
+> and diagnostic tools, including approved selective PLC-only builds. The
+> configured-file tools read saved files and do not provide live build or
+> diagnostic access. New `source.*` operations remain inactive in the release.
+> Host integration acceptance remains outstanding. See
+> [engineering backends](engineering-backends.md) for the current boundary.
+
 Diese Datei verfolgt die verbleibenden und abgeschlossenen Arbeiten im
 `twincat-mcp` npm-workspaces-Monorepo mit `core`, `pi` und `mcp`. Die aktive
 Planung steht bewusst oben; abgeschlossene Phasen bleiben darunter als

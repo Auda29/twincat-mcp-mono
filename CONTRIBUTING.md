@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for improving **pi-twincat-ads**.
+Thanks for improving the TwinCAT MCP monorepo.
 
 ## Workflow
 
@@ -11,7 +11,15 @@ Thanks for improving **pi-twincat-ads**.
 
 ## Development
 
-Details will live in the README once the package scaffold exists (`npm install`, scripts, lint, tests).
+Use locked development dependencies with `npm ci`, then run the relevant
+workspace checks in [README](README.md). Hosted CI covers Node/workspace tests
+and Windows net472 provider fixtures; `scripts/Test-NativeEngineering.ps1` runs
+the latter locally. Documentation-only changes should use focused consistency
+and link checks rather than live IDE/PLC tests.
+
+The current release scope and development-only editor code are distinct; see
+[Release Flow](docs/release-flow.md) before changing capability claims. Tests,
+review and package probes must not be described as real-host acceptance.
 
 ## License
 

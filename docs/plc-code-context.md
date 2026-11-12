@@ -51,7 +51,12 @@ from the source file. Embedded members share their containing file's digest.
 `textRepresentation: "normalizedSections"` identifies the extracted display
 text, which trims section whitespace and joins section content. The file digest
 does not hash that transformed text and does not establish a compiled baseline.
-These reads do not inspect live IDE buffers or authorize source changes.
+These reads use saved files. They do not establish the current contents of a
+live IDE buffer or authorize source changes. In Engineering 0.5.3, the new
+`source.*` operations are inactive in the released native host. Custom ST
+editor access exists only in a trusted in-code development path and is not
+evidence about the state of the released editor integration. See
+[the native provider contract](native-engineering-provider-v1.md).
 
 ## Boundaries
 

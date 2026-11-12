@@ -1,5 +1,10 @@
 # Implementierungsplan für `pi-twincat-ads`
 
+> **Historical plan:** This document records the original Pi ADS implementation
+> plan. Its statements about the current project state and future work reflect
+> that planning period. For the Engineering 0.5.3 release boundary, see
+> [engineering backends](engineering-backends.md).
+
 Diese Datei enthält den aktuellen Umsetzungsplan für `pi-twincat-ads`.
 
 ## Summary

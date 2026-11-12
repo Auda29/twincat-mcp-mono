@@ -9,6 +9,16 @@ session/build/diagnostic tools. All development source code and factories remain
 present; the fifteen-tool development catalog requires trusted in-code
 `enableDevelopmentSourceTools:true` and is never enabled by CLI/bootstrap/model
 arguments. Native development factories remain opt-in host APIs.
+
+The published tag `engineering-v0.5.3` pins commit
+`99de69b8cedec780a68a89a631132ea6eb76cf0b`; see
+[release assets and integrity verification](release-flow.md). Protocol 1 and
+managed assembly version 1.0.0.0 are unchanged. The release nine-tool catalog is
+`tc_session_describe`, `tc_project_association`, `tc_build_project`,
+`plc_build_project`, `tc_build_and_get_errors`, `tc_error_list`, `tc_output_read`,
+`tc_operation_get` and `tc_operation_cancel`. The default child has no ADS
+runtime-write, activation, download, login, run/stop or force tool.
+
 Assistant hosts the provider in the already bound IDE process and owns the local
 authenticated transport, session lifecycle, user interaction and packaging.
 Engineering owns the provider and engineering policy. No component discovers
@@ -174,6 +184,8 @@ closed. This observation does not authorize a build or a source edit. It is
 conditional on the host's loaded Automation Interface and remains unverified
 against a live XAE instance.
 
+The following source contract is retained development functionality, not an
+active release capability. In an explicitly enabled development host,
 `source.preview` covers one existing ST object and one section. It records
 exact verified text, identity, baseline digest and proposed digest. Apply
 requires that exact preview and approval, verifies the current live buffer and
@@ -185,7 +197,7 @@ Create, delete, multiple files, hardware and Safety changes are out of scope.
 No operation implicitly saves, switches configuration/platform, activates,
 downloads, logs in, runs, stops or forces values.
 
-### Supported live XML editor scope
+### Development-only live XML editor scope (inactive in release)
 
 `Create` exposes no editor access. `CreateWithEditorAccess` receives a trusted
 host callback for an exact canonical, already-open RDT moniker. The host must
@@ -232,7 +244,7 @@ restart. A journal does not authorize rollback; rollback needs a new native
 approval and exact current post-image. Specialized TwinCAT editor compatibility
 and live IDE acceptance remain unverified.
 
-### Attached TwinCAT ST editor reads and previews
+### Development-only attached ST reads and previews (inactive in release)
 
 `CreateWithEditorViews` adds `Func<string,string,object> getSectionEditor` to
 the seven-argument `CreateWithHostAccess` factory. Arguments are the exact
@@ -298,7 +310,9 @@ Error List contents. Unknown, stale, ambiguous or evicted evidence disables it.
 not exposed as a model MCP tool. The native host must register an explicit
 single-use click bound to request/build/diagnostic identity before dispatch.
 `CreateWithHostAccess` adds `Func<string,bool> navigateExactErrorItem` to
-`CreateWithEditorAccess`. The provider invokes it once, on the IDE thread,
+`CreateWithEditorAccess`. Its text-buffer callback may be null for the dormant
+source release mode; the navigation callback does not grant source access.
+The provider invokes the navigation callback once, on the IDE thread,
 with this bounded JSON proof:
 
 ```text

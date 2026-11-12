@@ -1,5 +1,10 @@
 # Runtime Events and Logs Backend Evaluation
 
+> Historical Task 15 design evaluation. The phase/future labels below preserve
+> that research context; they are not the current Engineering 0.5.3 capability
+> matrix or live acceptance evidence. See [Engineering Backends](engineering-backends.md)
+> and [Release Flow](release-flow.md) for the published release boundary.
+
 This note evaluates possible backends for Task 15 before the public tool API is
 fixed. The scope is Phase 2 runtime diagnostics only. Engineering build output,
 XAE error lists, Visual Studio output windows, and project-source diagnostics stay
