@@ -491,6 +491,7 @@ export interface EngineeringErrorContextResult {
     readonly endLine: number;
     readonly text: string;
   } | undefined;
+  readonly provenance?: { readonly source: "configuredProjectFile"; readonly editorState: "unknown" } | undefined;
   readonly reason?: string | undefined;
 }
 
@@ -2071,11 +2072,16 @@ export class EngineeringService {
     }
 
     const lines = readFileSync(resolvedFile, "utf8").split(/\r?\n/);
+    if (!Number.isInteger(line) || line < 1 || line > lines.length) {
+      return { available: false, backend: this.config.backend, file: resolvedFile, line,
+        provenance: { source: "configuredProjectFile", editorState: "unknown" },
+        reason: "The requested line is outside the file snapshot; source coordinates were not changed." };
+    }
     const contextLines = Math.min(
       Math.max(input.contextLines ?? DEFAULT_ENGINEERING_CONTEXT_LINES, 0),
       MAX_ENGINEERING_CONTEXT_LINES,
     );
-    const targetLine = Math.min(Math.max(line, 1), lines.length);
+    const targetLine = line;
     const startLine = Math.max(targetLine - contextLines, 1);
     const endLine = Math.min(targetLine + contextLines, lines.length);
     const text = lines.slice(startLine - 1, endLine).join("\n");
@@ -2083,6 +2089,7 @@ export class EngineeringService {
     return {
       available: true,
       backend: this.config.backend,
+      provenance: { source: "configuredProjectFile", editorState: "unknown" },
       ...(issue === undefined ? {} : { issue }),
       file: resolvedFile,
       line: targetLine,

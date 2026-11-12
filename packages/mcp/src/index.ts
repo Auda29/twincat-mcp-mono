@@ -26,6 +26,8 @@ import {
 } from "twincat-mcp-core";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import { bootstrapEngineeringHost } from "./engineering-bootstrap.js";
+import { createLiveEngineeringToolDefinitions } from "./engineering-live-tools.js";
 
 export const packageName = "twincat-mcp";
 
@@ -1454,8 +1456,9 @@ export async function callMcpTool(
   }
 }
 
-export function createMcpServer(runtime: TwinCatAdsRuntime): Server {
-  const tools = createMcpToolDefinitions(runtime);
+export function createMcpServer(runtime: TwinCatAdsRuntime, liveTools: McpToolDefinition[] = []): Server {
+  const overrides = new Set(liveTools.map((tool) => tool.name));
+  const tools = [...createMcpToolDefinitions(runtime).filter((tool) => !overrides.has(tool.name)), ...liveTools];
   const server = new Server(
     {
       name: packageName,
@@ -1582,9 +1585,20 @@ export async function main(): Promise<void> {
     return;
   }
 
+  const useHost = process.argv.slice(2).includes("--host-bootstrap-stdin");
+  let binding: Awaited<ReturnType<typeof bootstrapEngineeringHost>> | undefined;
+  if (useHost) {
+    try { binding = await bootstrapEngineeringHost(process.stdin); }
+    catch { throw new Error("Engineering host bootstrap failed"); }
+  }
   const config = await loadConfigInput();
-  const runtime = createRuntimeFromConfig(config);
-  const server = createMcpServer(runtime);
+  const runtime = createRuntimeFromConfig(useHost ? { ...config, readOnly: true, writeAllowlist: [] } : config);
+  const liveTools = binding === undefined ? [] : createLiveEngineeringToolDefinitions({
+    context: { sessionId: binding.sessionId, ...binding.expected },
+    dispatch: (request) => binding!.client.dispatch(request),
+  });
+  const server = createMcpServer(runtime, liveTools);
+  if (binding !== undefined) process.stdout.write(JSON.stringify({ kind: "twincat-assistant-engineering-ready", protocolVersion: 1, sessionId: binding.sessionId }) + "\n");
   await server.connect(new StdioServerTransport());
 }
 

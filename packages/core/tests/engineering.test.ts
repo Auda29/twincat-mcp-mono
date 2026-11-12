@@ -490,12 +490,17 @@ describe("engineering project context", () => {
         available: true,
         file: projectPath,
         line: 2,
+        provenance: { source: "configuredProjectFile", editorState: "unknown" },
         context: {
           startLine: 1,
           endLine: 3,
         },
       });
       expect(context.context?.text).toContain("<ItemGroup>");
+      expect(engineering.tcErrorContext({ file: projectPath, line: 999999 })).toMatchObject({
+        available: false, line: 999999,
+        provenance: { source: "configuredProjectFile", editorState: "unknown" },
+      });
 
       const project = engineering.listProjects().projects[0]!;
       const fileResource = engineering.tcResourceRead({
