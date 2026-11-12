@@ -77,7 +77,14 @@ try {
         Invoke-Checked node @($helper, 'copy-runtime', $stage, $materialized)
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $runtimeZip = Join-Path $output "$tag-runtime-win-x86.zip"
-        [System.IO.Compression.ZipFile]::CreateFromDirectory($materialized, $runtimeZip, [System.IO.Compression.CompressionLevel]::Optimal, $false)
+        $archive = [System.IO.Compression.ZipFile]::Open($runtimeZip, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $prefix = $materialized.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+            Get-ChildItem -LiteralPath $materialized -Recurse -File -Force | ForEach-Object {
+                $entry = $_.FullName.Substring($prefix.Length).Replace('\', '/')
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $entry, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
+            }
+        } finally { $archive.Dispose() }
         $assets = @($sourceZip, $runtimeZip) + @(Get-ChildItem -LiteralPath $output -Filter '*.tgz' | ForEach-Object FullName)
         if ($assets.Count -ne 5) { throw 'Expected source, runtime and three npm package assets.' }
         $receipt = [ordered]@{
