@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Engineering.Host/TwinCatMcp.Engineering.Host.csproj" />
+    <Reference Include="System.Web.Extensions" />
+  </ItemGroup>
+</Project>

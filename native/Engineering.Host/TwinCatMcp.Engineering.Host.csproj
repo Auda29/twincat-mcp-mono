@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <AssemblyName>TwinCatMcp.Engineering.Host</AssemblyName>
+    <RootNamespace>TwinCatMcp.Engineering.Host</RootNamespace>
+    <Version>1.0.0</Version>
+    <LangVersion>latest</LangVersion>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions"><Private>false</Private></Reference>
+    <Reference Include="Microsoft.CSharp"><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

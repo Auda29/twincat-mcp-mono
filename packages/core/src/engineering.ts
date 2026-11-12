@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -216,6 +217,14 @@ export interface EngineeringPlcPouSummary {
   readonly kind: EngineeringPlcObjectKind;
   readonly path: string;
   readonly sourceFile: string;
+  /** File-backed snapshot; the live editor buffer has not been inspected. */
+  readonly provenance: {
+    readonly source: "configuredProjectFile";
+    readonly editorState: "unknown";
+    /** Digest of the exact source-file bytes read, not of the display sections. */
+    readonly fileDigestSha256: string;
+    readonly textRepresentation: "normalizedSections";
+  };
   readonly project: EngineeringProjectSummary;
 }
 
@@ -486,6 +495,7 @@ export interface EngineeringErrorContextResult {
     readonly endLine: number;
     readonly text: string;
   } | undefined;
+  readonly provenance?: { readonly source: "configuredProjectFile"; readonly editorState: "unknown" } | undefined;
   readonly reason?: string | undefined;
 }
 
@@ -2066,11 +2076,16 @@ export class EngineeringService {
     }
 
     const lines = readFileSync(resolvedFile, "utf8").split(/\r?\n/);
+    if (!Number.isInteger(line) || line < 1 || line > lines.length) {
+      return { available: false, backend: this.config.backend, file: resolvedFile, line,
+        provenance: { source: "configuredProjectFile", editorState: "unknown" },
+        reason: "The requested line is outside the file snapshot; source coordinates were not changed." };
+    }
     const contextLines = Math.min(
       Math.max(input.contextLines ?? DEFAULT_ENGINEERING_CONTEXT_LINES, 0),
       MAX_ENGINEERING_CONTEXT_LINES,
     );
-    const targetLine = Math.min(Math.max(line, 1), lines.length);
+    const targetLine = line;
     const startLine = Math.max(targetLine - contextLines, 1);
     const endLine = Math.min(targetLine + contextLines, lines.length);
     const text = lines.slice(startLine - 1, endLine).join("\n");
@@ -2078,6 +2093,7 @@ export class EngineeringService {
     return {
       available: true,
       backend: this.config.backend,
+      provenance: { source: "configuredProjectFile", editorState: "unknown" },
       ...(issue === undefined ? {} : { issue }),
       file: resolvedFile,
       line: targetLine,
@@ -2752,7 +2768,9 @@ export class EngineeringService {
       return [];
     }
 
-    const rawXml = readFileSync(sourceFile, "utf8");
+    const sourceBytes = readFileSync(sourceFile);
+    const rawXml = sourceBytes.toString("utf8");
+    const fileDigestSha256 = createHash("sha256").update(sourceBytes).digest("hex");
     const parsed = xmlParser.parse(rawXml) as unknown;
     return collectPlcObjectElements(parsed).map((entry, index) => {
       const name = plcObjectName(sourceFile, entry.element);
@@ -2791,6 +2809,7 @@ export class EngineeringService {
         kind,
         path: `/${project.name}/${qualifiedName}`,
         sourceFile,
+        provenance: { source: "configuredProjectFile", editorState: "unknown", fileDigestSha256, textRepresentation: "normalizedSections" },
         project,
         declaration,
         implementation,
@@ -2804,7 +2823,7 @@ export class EngineeringService {
     projectFilter?: string,
   ): EngineeringPlcPouContent {
     const normalizedPou = pou.trim().toLowerCase();
-    const object = this.buildPlcObjects(projectFilter).find(
+    const matches = this.buildPlcObjects(projectFilter).filter(
       (entry) =>
         entry.id.toLowerCase() === normalizedPou ||
         entry.name.toLowerCase() === normalizedPou ||
@@ -2812,11 +2831,13 @@ export class EngineeringService {
         entry.sourceFile.toLowerCase() === normalizedPou,
     );
 
-    if (object === undefined) {
+    if (matches.length === 0) {
       throw new Error(`PLC object "${pou}" was not found.`);
     }
-
-    return object;
+    if (matches.length !== 1) {
+      throw new Error(`PLC object "${pou}" is ambiguous; use its exact id.`);
+    }
+    return matches[0]!;
   }
 
   private toPlcPouSummary(
@@ -2830,6 +2851,7 @@ export class EngineeringService {
       kind: pou.kind,
       path: pou.path,
       sourceFile: pou.sourceFile,
+      provenance: pou.provenance,
       project: pou.project,
     };
   }

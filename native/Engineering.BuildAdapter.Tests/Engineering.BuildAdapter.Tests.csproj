@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net472</TargetFramework><OutputType>Exe</OutputType><LangVersion>latest</LangVersion><AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages><EnableDefaultCompileItems>false</EnableDefaultCompileItems></PropertyGroup><ItemGroup>
+<Compile Include="Checks.cs"/><Compile Include="../Engineering.Host/BuildDteAdapter.cs" Link="BuildDteAdapter.cs"/><Compile Include="../Engineering.Host/BuildProjectPolicy.cs" Link="BuildProjectPolicy.cs"/><Compile Include="../Engineering.Host/PlcProjectAssociationService.cs" Link="PlcProjectAssociationService.cs"/>
+<ProjectReference Include="EnvDteFixture/EnvDteFixture.csproj"/><ProjectReference Include="TcFixture/TcFixture.csproj"/>
+</ItemGroup></Project>

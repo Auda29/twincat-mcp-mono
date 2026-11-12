@@ -5,6 +5,8 @@ node_modules/
 dist/
 build/
 out/
+native/**/bin/
+native/**/obj/
 *.tsbuildinfo
 
 # Logs and caches

@@ -5,6 +5,8 @@ export {
   type OutOfCoreResponsibility,
 } from "./boundaries.js";
 
+export { EngineeringHostClient } from "./engineering-host-client.js";
+
 export {
   DEFAULT_LOCAL_ADS_PORT,
   DEFAULT_MAX_NOTIFICATIONS,

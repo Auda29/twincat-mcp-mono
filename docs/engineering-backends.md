@@ -5,6 +5,28 @@ backend for now is explicit project-file configuration; live XAE and Visual
 Studio integrations are reported as unavailable capabilities instead of being
 silently assumed.
 
+## Dedicated native host provider
+
+The Assistant-owned child can opt into protocol 1 through its bounded stdin
+bootstrap and authenticated local pipe. The ordinary configured-file MCP path
+does not acquire editor or build access. The helper receives the host's exact
+already-bound DTE and, optionally, an already-open RDT/MEF text-buffer accessor.
+See [the native provider contract](native-engineering-provider-v1.md).
+
+The live provider implements selective `.plcproj` compilation with explicit
+native approval and immutable configuration/platform inputs. It refuses unknown
+dirty state, platform mismatch, ambiguous association, unsafe project hooks and
+nonempty or unverifiable build dependencies. Builds are nonblocking operations;
+diagnostics and output belong to an explicit build operation. Native source
+changes have a separate approval lane, exact live XML-buffer baseline, prepared
+session journal and conflict-safe rollback for supported already-open raw
+`.TcPOU` XML buffers. Attached normal TwinCAT ST editors support verified live
+read and read-only diff preview through the scoped host accessor. Their writes
+remain unsupported pending a proven atomic transaction contract. Compiler
+navigation uses a retained source baseline and explicit native click followed
+by an exact current ErrorItem match. These implementations require host
+integration acceptance and do not constitute live-machine validation.
+
 ## Backend Evaluation
 
 ### Configured project files

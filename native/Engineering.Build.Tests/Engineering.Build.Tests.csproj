@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Compile Include="../Engineering.Host/Build*.cs" Link="%(Filename)%(Extension)" />
+    <Compile Include="../Engineering.Host/NativeBuildService.cs" Link="NativeBuildService.cs" />
+    <Compile Include="../Engineering.Host/PlcProjectAssociationService.cs" Link="PlcProjectAssociationService.cs" />
+  </ItemGroup>
+</Project>

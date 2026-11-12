@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net472</TargetFramework><OutputType>Exe</OutputType><LangVersion>latest</LangVersion><AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages><AssemblyName>Microsoft.VisualStudio.Text.Data</AssemblyName></PropertyGroup>
+  <ItemGroup><Compile Include="../Engineering.Host/SourcePolicy.cs" Link="SourcePolicy.cs" /><Compile Include="../Engineering.Host/VsTextBufferAdapter.cs" Link="VsTextBufferAdapter.cs" /></ItemGroup>
+</Project>
