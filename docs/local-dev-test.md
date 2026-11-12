@@ -1,5 +1,10 @@
 # Local Dev Test
 
+This ADS/Pi procedure is separate from the published 0.5.3 bound engineering
+child and is not release acceptance evidence. Real PLC access requires its own
+authorization. For current GitHub artifacts and dormant editor scope, see
+[Release Flow](release-flow.md).
+
 Use this when you want to exercise the built package directly against a real PLC before wiring it into a Pi host instance.
 
 If you want to test the real Pi packaging layer instead, use the same JSON config file and start Pi with `--plc-config ./local.config.json`.
@@ -7,7 +12,7 @@ If you want to test the real Pi packaging layer instead, use the same JSON confi
 ## 1. Build the package
 
 ```bash
-npm install
+npm ci
 npm run build
 ```
 

@@ -6,6 +6,11 @@ This package exposes `twincat-mcp-core` runtime operations as Model Context
 Protocol tools. MCP-specific protocol handling lives here; ADS domain behavior,
 configuration validation, watches, and write gates live in `twincat-mcp-core`.
 
+Engineering 0.5.3 is published as
+[GitHub release assets](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
+at commit `99de69b8cedec780a68a89a631132ea6eb76cf0b`, not as a new npm
+publication. See [asset verification and release limits](../../docs/release-flow.md).
+
 ## Install
 
 ```bash
@@ -13,6 +18,10 @@ npm install -g twincat-mcp
 ```
 
 Node.js 20 or newer is required.
+The registry command above does not pin the GitHub-only 0.5.3 release. For those
+exact bytes, verify and extract the released runtime archive, supply Node
+separately and use `packages/mcp/dist/index.js` as its entry point. Do not enable
+the host bootstrap manually with credentials from a configuration file.
 
 ## Bundled Skills
 
@@ -122,7 +131,16 @@ Direct mode additionally uses:
 }
 ```
 
-## Tools
+## Ordinary ADS and configured-file tools
+
+The ordinary server uses the ADS configuration above. Its configured-file
+engineering tools read saved files, not live editor buffers: `tc_list_workbenches`,
+`tc_list_projects`, `tc_project_state`, `plc_list_pous`, `plc_read_pou`,
+`plc_search_code`, `plc_describe_pou`, `plc_list_libraries` and
+`plc_describe_library`. File-backed build calls and compiler-owned error/output
+lists report unavailable; `tc_error_context` can return bounded saved-file text.
+Editor state remains unknown. See [Engineering Backends](../../docs/engineering-backends.md)
+for the complete distinction from the bound child.
 
 Connection:
 
@@ -194,6 +212,58 @@ Watches:
 
 Watches are modeled only as tools. They are not MCP resources or
 subscriptions yet.
+
+## Assistant-owned bound engineering child
+
+This separate, engineering-only child is started by Assistant with
+`--host-bootstrap-stdin`. The host supplies a frozen session/IDE/project binding
+and authenticates the local pipe. Capability material arrives only through the
+owned child's stdin, never command-line arguments, environment or saved config.
+There is no independent ROT attachment or model-selected IDE/project.
+
+The published release's default catalog has exactly nine tools:
+
+| Tool | Operation and input |
+| --- | --- |
+| `tc_session_describe` | Read current binding/capabilities; `{}` |
+| `tc_project_association` | Read the bound PLC-to-TwinCAT association; `{}` |
+| `tc_build_project` | Selective bound PLC build; `{configuration, platform}` |
+| `plc_build_project` | The same selective PLC build contract |
+| `tc_build_and_get_errors` | Submit the same nonblocking build; query its operation afterward |
+| `tc_error_list` | Build-owned diagnostics; `{targetOperationId}` |
+| `tc_output_read` | Build-owned output; `{targetOperationId}` |
+| `tc_operation_get` | Query the explicit build operation; `{targetOperationId}` |
+| `tc_operation_cancel` | Record best-effort cancellation; `{targetOperationId}` |
+
+Use the exact configuration/platform returned by `tc_session_describe`; the
+provider rechecks them around explicit native approval and never switches them.
+All three build aliases address the exact `.plcproj`, never silently widen to
+the owning `.tsproj`. A submission returns an operation ID, not completed build
+acceptance. Unknown dirty state, ambiguous binding, unsafe project policy or
+nonempty/unverifiable dependencies refuse. Cancellation does not invoke global
+IDE cancellation or prove that a submitted build stopped.
+
+Diagnostics/output belong to the explicit build ID. Navigation is a native-click
+operation with source-baseline leases and an exact current ErrorItem match;
+`diagnostics.navigate` is not a model tool. No unrelated Error List row is
+labelled fresh. The host eligibility gate is exact TcXaeShell/Shell15 x86,
+executable 15.0.0.0 and TwinCAT 3.1.4024.78; other versions/x64 hosts are not
+implicitly supported. Implementation and package checks do not establish live
+host acceptance.
+
+The release host selects `CreateWithHostAccess` with a null text-buffer callback
+and no section accessor, denies `source.*` before dispatch and hides source UI.
+The provider advertises source capabilities unsupported and rejects all such
+operations. None of the six `plc_source_*` tools is registered. All fifteen
+development definitions, editor factories and implementation are retained via
+trusted in-code `enableDevelopmentSourceTools:true`, not CLI/bootstrap/model
+arguments. Even in development, normal-ST writes lack a safe transaction contract.
+This child has no ADS connection or runtime-write/activation/download/login/
+run/stop/force tools. Ordinary read-only saved-file attachment remains separate.
+
+The exact nine schemas are published as `engineering-catalog.json`, pinned by
+the release receipt. Review the [dependency advisories](../../docs/release-flow.md)
+before adopting the artifacts; the audit is not clean.
 
 ## Safety Model
 

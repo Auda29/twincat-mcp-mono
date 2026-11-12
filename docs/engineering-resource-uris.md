@@ -1,5 +1,11 @@
 # Engineering Resource URIs
 
+This page describes the ordinary configured-file catalog. The published
+Engineering 0.5.3 bound child has a separate nine-tool catalog, with no
+`tc_resource_read` or MCP resource subscription. Its build-owned diagnostics
+and native navigation proof do not make `err://` a live resource backend.
+See [Engineering Backends](engineering-backends.md) for current release scope.
+
 Task 24 introduces versioned, agent-facing URI references for TwinCAT
 engineering artifacts. Tool responses keep their existing compact metadata and
 add resource references where the configured project-file backend can resolve
@@ -59,9 +65,10 @@ The result includes:
 
 ## MCP Resources
 
-The current MCP server exposes this layer through the `tc_resource_read` tool.
+The ordinary configured-file MCP server exposes this layer through the
+`tc_resource_read` tool.
 Native MCP Resources/Subscriptions were evaluated for this phase but are not
 enabled yet because the existing server is tool-only and the file-backed
-engineering backend has no live change notifications. A future live XAE or
-Automation Interface backend can map the same URI schemes to MCP Resources and
-subscriptions without changing the URI contract.
+engineering backend has no live change notifications. Mapping these URI schemes
+to live MCP Resources/Subscriptions remains future work; the separate released
+native helper does not implement that mapping.

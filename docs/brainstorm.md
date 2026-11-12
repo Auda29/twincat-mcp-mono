@@ -1,5 +1,9 @@
 # pi-twincat-ads — Kurzfassung
 
+> **Historical brainstorm:** This document records early Pi ADS ideas, not the
+> current tool or release specification. For the Engineering 0.5.3 release
+> boundary, see [engineering backends](engineering-backends.md).
+
 **Zweck:** Pi-Agent bekommt Lese-/Schreibzugriff auf TwinCAT-Runtime-Werte via ADS.
 
 ## Stack

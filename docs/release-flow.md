@@ -7,6 +7,76 @@ package tarballs, provider source archive and an integrity receipt. This tag
 does not trigger the separate `core-v*` npm publication chain. Package versions
 remain lockstep; a GitHub artifact release does not claim npm publication.
 
+Published release: [Engineering MCP 0.5.3](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3).
+The tag points to merge commit `99de69b8cedec780a68a89a631132ea6eb76cf0b`.
+Both hosted [post-merge CI jobs](https://github.com/Auda29/twincat-mcp-mono/actions/runs/43231859449)
+passed. The development implementation at `83a7d226` remains in that history.
+
+### Published assets and installation boundary
+
+Download assets from the release above. Node.js 20 or newer is required and is
+not bundled. The archive is an integration artifact, not a TwinCAT installer or
+automatic IDE attachment mechanism.
+
+| Asset | Contents |
+| --- | --- |
+| `engineering-v0.5.3-runtime-win-x86.zip` | Core/MCP production dependencies, `packages/mcp/dist/index.js`, own `host/x86/TwinCatMcp.Engineering.Host.dll`, provider source and catalog |
+| `engineering-v0.5.3-sources.zip` | Complete tracked source at the release commit, including dormant development editor code |
+| `engineering-v0.5.3-receipt.json` | Schema 1 source/module/catalog pin and five primary asset SHA-256 values/sizes |
+| `engineering-catalog.json` | Exact nine released tool schemas; hash is bound by the receipt |
+| `twincat-mcp-core-0.5.3.tgz`, `twincat-mcp-0.5.3.tgz`, `pi-twincat-ads-0.5.3.tgz` | Separate package tarballs, not new npm registry publications |
+
+Pi's agent dependencies are not included in the assembled runtime. Its only
+native binary is this project's helper DLL; no TwinCAT/VS vendor or NuGet
+binaries are included. The ordinary entry point can use a normal configuration
+file. Only Assistant's owned child uses `--host-bootstrap-stdin`, with secret
+bootstrap through owned-child stdin and the host's exact bound session. Do not
+put capability material in config, environment, command-line arguments or logs.
+
+### Verify the release pin before use
+
+The published receipt SHA-256 is
+`155a298523117c2e7e7485de092943650bc59d061db0d8c997da8d1065526385`.
+Download all seven assets to a dedicated directory and verify before extraction
+or execution. For example, in PowerShell:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$releaseDir = 'C:\downloads\engineering-v0.5.3'
+$receiptPath = Join-Path $releaseDir 'engineering-v0.5.3-receipt.json'
+$expectedReceipt = '155a298523117c2e7e7485de092943650bc59d061db0d8c997da8d1065526385'
+if ((Get-FileHash -LiteralPath $receiptPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expectedReceipt) {
+    throw 'Release receipt mismatch'
+}
+$receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+if ($receipt.schemaVersion -ne 1 -or $receipt.version -ne '0.5.3' -or
+    $receipt.sourceCommit -ne '99de69b8cedec780a68a89a631132ea6eb76cf0b') {
+    throw 'Unexpected release identity'
+}
+foreach ($asset in $receipt.assets) {
+    $path = Join-Path $releaseDir $asset.filename
+    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256 -or
+        (Get-Item -LiteralPath $path).Length -ne $asset.size) {
+        throw "Asset mismatch: $($asset.filename)"
+    }
+}
+$catalogPath = Join-Path $releaseDir $receipt.catalog.path
+if ((Get-FileHash -LiteralPath $catalogPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $receipt.catalog.sha256) {
+    throw 'Tool catalog mismatch'
+}
+```
+
+The runtime ZIP SHA-256 is
+`0086cfc31cfb697075efbd1332f58b4146a95f544f5c34daa8a2d65b0f43b5f1`.
+The receipt also records module assembly version `1.0.0.0`, protocol 1,
+`sourceFeatures: "disabled"`, the seven-argument null-accessor factory, module
+bytes and native source-tree hash. Assistant rebuilds the provider from the
+exact released source and pins its own module hash; independently built DLL
+bytes may differ across build paths or SDKs. Do not substitute an arbitrary
+developer-folder DLL or treat matching assembly names as integrity proof.
+
+### Released engineering scope
+
 The release host uses factory7 `CreateWithHostAccess` with a null text-buffer
 accessor and no section accessor. It must also deny `source.*` before provider
 dispatch and keep the source UI hidden. The provider advertises unsupported
@@ -36,7 +106,16 @@ ordinary stdio tools do, and `.max()` does not fully mitigate the advisory.
 SDK stdin limits are separate from the smaller authenticated provider frame
 limits. A Zod major migration is deferred, not claimed fixed or universally
 unreachable. Consumers should use trusted local clients and retain this risk
-in their release assessment.
+in their release assessment. The final assembled runtime audit also reported
+one low fast-xml-parser advisory,
+[GHSA-474x-hrwr-fgx4](https://github.com/advisories/GHSA-474x-hrwr-fgx4).
+The high Zod advisory is
+[GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5).
+These two findings describe the released runtime snapshot, not every development
+or Pi dependency in the full workspace. No clean audit or universal
+non-exploitability claim is made.
+
+## Separate npm publication flow
 
 The `twincat-mcp` monorepo uses a coordinated lockstep release flow for the
 root project, `twincat-mcp-core`, `pi-twincat-ads`, and `twincat-mcp`.

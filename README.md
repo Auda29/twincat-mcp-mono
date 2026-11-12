@@ -12,6 +12,39 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
+## Current release: Engineering 0.5.3
+
+[Engineering 0.5.3](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
+is a GitHub artifact release pinned to
+`99de69b8cedec780a68a89a631132ea6eb76cf0b`. It did not publish version 0.5.3
+to npm. Use the released runtime/source archives and integrity receipt described
+in [Release Flow](docs/release-flow.md), rather than assuming an unversioned npm
+install selects these bytes. Node.js 20 or newer is supplied separately.
+
+There are two engineering paths:
+
+- The ordinary configured-file backend reads saved project/POU files. It has no
+  live IDE session, cannot establish editor dirty state and cannot compile.
+- The Assistant-owned authenticated child receives an exact already-bound IDE
+  session and exposes nine session/build/diagnostic tools. It can submit an
+  explicitly approved selective PLC build with unchanged configuration/platform,
+  then return build-owned diagnostics/output. Native diagnostic navigation
+  requires an explicit click and revalidated source/ErrorItem evidence.
+
+All new ST-editor discovery/read/preview/apply/rollback/journal operations are
+**inactive in the release configuration**. The host selects factory7 with a null
+editor accessor, rejects `source.*` and hides source UI; the child omits source
+tools. All fifteen development definitions and their implementation remain in
+the repository behind trusted in-code opt-in. The ordinary saved-file read tools
+remain available. The dedicated child exposes no ADS runtime writes, activation,
+download, login, run/stop or force actions.
+
+Hosted Node and Windows native CI, fixtures, packaging probes and independent
+review passed for this release. They do not establish real-host acceptance.
+The shipped runtime retains one high Zod 3 and one low fast-xml-parser dependency
+advisory, documented in [Release Flow](docs/release-flow.md). Normal-ST writes
+also lack a proven exact-section atomic transaction contract.
+
 ## Packages
 
 | Package | Path | Purpose |
@@ -162,7 +195,7 @@ exact PLC symbol, NC axis, IO point, event source, or log source. Use the combo
 tools for first-pass triage when the user asks for "what is wrong right now?"
 or a compact TwinCAT-wide runtime health check.
 
-## Safety Model
+## ADS runtime safety model
 
 Writes are blocked unless all three gates allow them:
 
@@ -172,6 +205,9 @@ Writes are blocked unless all three gates allow them:
 
 The safe default is read-only everywhere. Read tools, state tools, and watches
 remain available while writes stay blocked.
+These gates control ADS writes; they do not authorize engineering builds or
+source changes. The bound child has its own explicit native approval lane and
+keeps all source-editor operations disabled in the release configuration.
 
 ## Pi Usage
 
@@ -180,6 +216,10 @@ Install the Pi package after it has been published or packed:
 ```bash
 pi install npm:pi-twincat-ads
 ```
+
+This registry command is not an installation pin for the GitHub-only 0.5.3
+release. Its package tarballs are separate assets; the assembled Engineering
+runtime contains Core and MCP, not Pi's agent dependencies.
 
 The Pi package registers `./dist/pi-extension.js` and the bundled
 `./skills/twincat-ads` skill directory. It accepts configuration through:
@@ -215,6 +255,8 @@ TwinCAT-wide runtime diagnostics (`tc_state`, `tc_event_list`,
 resources or subscriptions yet.
 
 See `packages/mcp/README.md` for tool names and configuration details.
+Its ordinary ADS/configured-file catalog is distinct from the dedicated
+[nine-tool bound child](packages/mcp/README.md#assistant-owned-bound-engineering-child).
 
 ## Migration
 
@@ -227,14 +269,15 @@ See `docs/migration.md` for package mapping and behavior notes.
 
 ## Release
 
-Release order:
+For npm publication, release order is:
 
 1. `twincat-mcp-core`
 2. `pi-twincat-ads`
 3. `twincat-mcp`
 
 See `docs/release-flow.md` for publish checks, version policy, and the Pi npm
-publish workflow.
+publish workflow. The published `engineering-v0.5.3` integration release uses
+GitHub assets and does not trigger that npm chain.
 
 ## Repository
 

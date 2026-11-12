@@ -1,5 +1,10 @@
 # Manual Smoke Test
 
+This is an optional ADS/Pi live-test procedure, not a record that it was run or
+real-host acceptance for Engineering 0.5.3. The Assistant-owned engineering
+child is separate and exposes no ADS writes. See [current release scope](release-flow.md).
+The procedure below requires separately authorized access to the intended PLC.
+
 This smoke test is intended for a TwinCAT 3 PLC reachable on ADS port `851`.
 
 ## Preconditions
