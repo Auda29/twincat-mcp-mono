@@ -1,6 +1,14 @@
 # Native engineering provider contract, version 1
 
 This contract has a bounded implementation; live IDE acceptance is separate.
+Release 0.5.3 leaves all source-editor features dormant. The release host uses
+`CreateWithHostAccess` with a null `getTextBuffer` and no section accessor.
+Every `source.*` operation is rejected before service construction or approval;
+all source capabilities are unsupported. The dedicated Node child exposes nine
+session/build/diagnostic tools. All development source code and factories remain
+present; the fifteen-tool development catalog requires trusted in-code
+`enableDevelopmentSourceTools:true` and is never enabled by CLI/bootstrap/model
+arguments. Native development factories remain opt-in host APIs.
 Assistant hosts the provider in the already bound IDE process and owns the local
 authenticated transport, session lifecycle, user interaction and packaging.
 Engineering owns the provider and engineering policy. No component discovers

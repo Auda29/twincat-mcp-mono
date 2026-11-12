@@ -29,11 +29,21 @@ function setup(respond?: (request: Record<string, unknown>) => unknown) {
       output: "build output", diagnostics: [{ File: "Main.TcPOU", Severity: "error", Message: "Example" }],
     });
   });
-  const tools = createLiveEngineeringToolDefinitions({ context, dispatch });
+  const tools = createLiveEngineeringToolDefinitions({ context, dispatch }, { enableDevelopmentSourceTools: true });
   return { dispatch, tool: (name: string) => tools.find((tool) => tool.name === name)! };
 }
 
 describe("explicit live engineering tools", () => {
+  it("defaults to the nine release tools while retaining explicit development definitions", () => {
+    const binding = { context, dispatch: vi.fn(async () => { throw new Error("not called"); }) };
+    const release = createLiveEngineeringToolDefinitions(binding);
+    expect(release.map((tool) => tool.name)).toEqual([
+      "tc_session_describe", "tc_project_association", "tc_build_project", "plc_build_project",
+      "tc_build_and_get_errors", "tc_error_list", "tc_output_read", "tc_operation_get", "tc_operation_cancel",
+    ]);
+    expect(createLiveEngineeringToolDefinitions(binding, { enableDevelopmentSourceTools: true })).toHaveLength(15);
+    expect(binding.dispatch).not.toHaveBeenCalled();
+  });
   it("routes source preview and mutation through the bound manual lane", async () => {
     const { dispatch, tool } = setup((request) => ({ protocolVersion: 1, sessionId: request.sessionId, operationId: request.operationId,
       status: "succeeded", provenance: { source: "liveBuffer", dirtyState: "dirty", buildOperationId: null }, result: { previewOperationId: request.operationId } }));

@@ -51,6 +51,7 @@ const responseSchema = z.object({
 /** Explicit live mode. The default file backend and its tools remain unchanged. */
 export function createLiveEngineeringToolDefinitions(
   binding: LiveEngineeringToolBinding,
+  options: { readonly enableDevelopmentSourceTools?: boolean } = {},
 ): McpToolDefinition[] {
   const context = Object.freeze(contextSchema.parse(binding.context));
   const dispatch = binding.dispatch;
@@ -119,7 +120,7 @@ export function createLiveEngineeringToolDefinitions(
     },
   });
 
-  return [
+  const tools = [
     { name: "tc_session_describe", title: "TwinCAT Live Session Capabilities",
       description: "Describe the bound live engineering session and provider capabilities without starting a build.",
       inputSchema: startInput, annotations: { readOnlyHint: true, openWorldHint: false },
@@ -142,4 +143,8 @@ export function createLiveEngineeringToolDefinitions(
     source("plc_source_rollback", "source.rollback", rollbackInput, "Restore a journaled pre-image after separate native approval, only if the current whole buffer equals its exact post-image. Does not save.", true),
     source("plc_source_journal", "source.journal", journalInput, "Read the retained session-memory journal, including unknown outcomes. Journals do not survive provider disposal or restart."),
   ];
+  // Release defaults retain build/session tools only. The source definitions
+  // remain available through a trusted in-code development opt-in, never CLI,
+  // bootstrap data, configuration or model tool arguments.
+  return options.enableDevelopmentSourceTools === true ? tools : tools.filter((tool) => !tool.name.startsWith("plc_source_"));
 }

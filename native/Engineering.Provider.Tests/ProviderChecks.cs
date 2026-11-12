@@ -34,6 +34,16 @@ internal static class ProviderChecks
             var valid = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddSeconds(90).ToString("o"), configuration = "Debug", platform = "TwinCAT RT (x86)" });
             Require((string)valid["status"] == "unsupported" && (string)valid["error"] == "build_events_unavailable", "unavailable host fails closed");
         }
-        Console.WriteLine("Provider checks passed: 305"); return 0;
+        int approvals = 0;
+        using (var provider = EngineeringProviderFactory.CreateWithHostAccess(new object(), _ => false, () => context, _ => { approvals++; return false; }, new Inline(), null, _ => false)) {
+            foreach (var operation in new[] { "source.targets", "source.read", "source.preview", "source.apply", "source.rollback", "source.journal", "source.future" }) {
+                var request = json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = Guid.NewGuid().ToString("D"), operation,
+                    expected = new { idePid = 123, ideStartedUtc = start.ToString("o"), solutionFile = context.SolutionFile, projectFile = context.ProjectFile, contextEpoch = "epoch" }, arguments = new { } });
+                var response = (Dictionary<string, object>)json.DeserializeObject(provider.DispatchAsync(request, CancellationToken.None).GetAwaiter().GetResult());
+                Require((string)response["status"] == "unsupported" && (string)response["error"] == "source_features_disabled", "dormant factory7 must reject all source operations before argument handling");
+            }
+            Require(approvals == 0, "dormant source operations cannot request approval");
+        }
+        Console.WriteLine("Provider checks passed: 313"); return 0;
     }
 }

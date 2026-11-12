@@ -88,7 +88,7 @@ namespace TwinCatMcp.Engineering.Host
             Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval, SynchronizationContext ideContext,
             Func<string, object> getTextBuffer, Func<string, bool> navigateExactErrorItem)
         {
-            if (injectedDte == null || authoritativeDirty == null || currentContext == null || consumeApproval == null || ideContext == null || getTextBuffer == null || navigateExactErrorItem == null)
+            if (injectedDte == null || authoritativeDirty == null || currentContext == null || consumeApproval == null || ideContext == null || navigateExactErrorItem == null)
                 throw new ArgumentNullException();
             return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext, getTextBuffer, navigateExactErrorItem);
         }
@@ -216,6 +216,10 @@ namespace TwinCatMcp.Engineering.Host
             BuildSnapshot snapshot = null;
             try
             {
+                // A null editor accessor is the release boundary. Reject every
+                // source operation before constructing a source service or approval.
+                if (name != null && name.StartsWith("source.", StringComparison.Ordinal) && getTextBuffer == null && getSectionEditor == null)
+                    return Failure(json, session, operation, "unsupported", "source_features_disabled");
                 if (name == "diagnostics.navigate")
                 {
                     Guid buildId;
