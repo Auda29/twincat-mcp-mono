@@ -19,6 +19,8 @@ namespace TwinCatMcp.Engineering.Host
         public string Code { get; set; }
         public int Line { get; set; }
         public int Column { get; set; }
+        public string DiagnosticId { get; set; }
+        internal BuildSourceNativeCandidate NavigationCandidate { get; set; }
     }
 
     internal sealed class BuildSnapshot

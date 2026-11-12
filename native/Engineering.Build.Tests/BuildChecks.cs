@@ -93,9 +93,46 @@ internal static class BuildChecks
             Throws(() => service.Start(Guid.NewGuid(), "a.sln", "a.plcproj", () => { }), "refused", "unknown submission never retried");
         }
         CheckProjectPolicy();
+        CheckNavigation();
         Throws(() => new NativeBuildService(new object(), _ => false), "unsupported", "unavailable DTE fails closed");
         Console.WriteLine("Build checks passed: " + checks);
         return 0;
+    }
+
+    private static void CheckNavigation()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "engineering-build-nav-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var project = Path.Combine(dir, "a.plcproj"); var source = Path.Combine(dir, "Main.TcPOU");
+            File.WriteAllText(project, "<Project><ItemGroup><Compile Include=\"Main.TcPOU\" /></ItemGroup></Project>");
+            File.WriteAllText(source, "<TcPlcObject><POU Name=\"Main\" Id=\"11111111-1111-1111-1111-111111111111\"><Implementation><ST><![CDATA[x := 1;]]></ST></Implementation></POU></TcPlcObject>");
+            var ide = new FakeIde();
+            using (var service = new NativeBuildService(ide, _ => false, () => DateTime.UtcNow))
+            {
+                var id = Guid.NewGuid(); service.Start(id, Path.Combine(dir, "a.sln"), project, () => { }); ide.Begin(); ide.BeginProject();
+                ide.Output += source + "(1,1): error C0001: Wrong token\n"; ide.EndProject(false); ide.End();
+                var diagnostic = service.Get(id).Diagnostics.Single();
+                Expect(diagnostic.DiagnosticId.Length == 64 && diagnostic.NavigationCandidate.Status == "candidate", "current build diagnostic owns source baseline");
+                int calls = 0;
+                var status = service.Navigate(id, diagnostic.DiagnosticId, (d, proof) => {
+                    calls++; Expect(proof.SourceFile == source && proof.SourceDigest.Length == 64 && proof.ProjectFile == project && proof.Section == null, "native navigation proof does not guess section");
+                    bool locked = false; try { using (var f = new FileStream(source, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { } } catch (IOException) { locked = true; }
+                    Expect(locked, "source lease held through native navigation callback"); return true;
+                });
+                Expect(status == "succeeded" && calls == 1, "native callback invoked once for exact diagnostic");
+                Expect(service.Navigate(id, new string('0', 64), (d, proof) => { calls++; return true; }) == "refused" && calls == 1, "unknown diagnostic cannot navigate");
+                File.AppendAllText(source, " ");
+                Expect(service.Get(id).Diagnostics.Single().NavigationCandidate == null, "stale source disables navigation eligibility");
+                Expect(service.Navigate(id, diagnostic.DiagnosticId, (d, proof) => { calls++; return true; }) == "conflict" && calls == 1, "stale source cannot reach native navigation");
+            }
+        }
+        finally
+        {
+            if (!Path.GetFullPath(dir).StartsWith(Path.Combine(Path.GetTempPath(), "engineering-build-nav-"), StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException();
+            Directory.Delete(dir, true);
+        }
     }
 
     private static void CheckProjectPolicy()

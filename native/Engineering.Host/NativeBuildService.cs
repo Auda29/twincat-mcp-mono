@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Web.Script.Serialization;
 
 namespace TwinCatMcp.Engineering.Host
 {
@@ -18,12 +21,14 @@ namespace TwinCatMcp.Engineering.Host
             internal DateTime Deadline;
             internal bool Invalid, OutputTruncated, DiagnosticsTruncated, CancellationRequested;
             internal List<BuildDiagnostic> Diagnostics = new List<BuildDiagnostic>();
+            internal BuildSourceBaseline SourceBaseline;
         }
 
         private readonly IBuildIde ide;
         private readonly Func<string, bool?> dirty;
         private readonly Func<DateTime> utcNow;
         private readonly Dictionary<Guid, Run> runs = new Dictionary<Guid, Run>();
+        private readonly Queue<Run> sourceBaselines = new Queue<Run>();
         private Run active;
         private bool disposed;
 
@@ -72,6 +77,9 @@ namespace TwinCatMcp.Engineering.Host
             revalidateContext();
             // The native approval UI may pump messages. Recheck all dirty,
             // configuration and project-policy gates after it returns.
+            // Baseline capture invokes host dirty callbacks too, so keep it
+            // before the complete final preflight rather than after that gate.
+            var sourceBaseline = BuildSourceBaseline.Capture(projectFile, dirty);
             var checkedTarget = ide.Prepare(solutionFile, projectFile, dirty);
             if (!string.Equals(target.UniqueName, checkedTarget.UniqueName, StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(target.ProjectFile, checkedTarget.ProjectFile, StringComparison.OrdinalIgnoreCase) ||
@@ -84,6 +92,12 @@ namespace TwinCatMcp.Engineering.Host
                 Id = operationId, SolutionFile = solutionFile, ProjectFile = projectFile, Target = target,
                 Revalidate = revalidateContext, Status = "accepted", Deadline = utcNow().AddMinutes(2)
             };
+            run.SourceBaseline = sourceBaseline;
+            if (run.SourceBaseline != null)
+            {
+                sourceBaselines.Enqueue(run);
+                while (sourceBaselines.Count > 4) sourceBaselines.Dequeue().SourceBaseline = null;
+            }
             runs.Add(operationId, run);
             active = run;
             try { revalidateContext(); if (validateAuthorization != null) validateAuthorization(); }
@@ -210,14 +224,45 @@ namespace TwinCatMcp.Engineering.Host
             run.Before = null; run.Output = null; run.Diagnostics.Clear(); run.OutputTruncated = false; run.DiagnosticsTruncated = false;
         }
 
-        private static BuildSnapshot Snapshot(Run run)
+        private BuildSnapshot Snapshot(Run run)
         {
+            var baselineCurrent = run.SourceBaseline != null && run.SourceBaseline.IsCurrent(dirty);
             return new BuildSnapshot {
                 BuildOperationId = run.Id.ToString("D"), Status = run.Status, Configuration = run.Target.Configuration, Platform = run.Target.Platform,
                 Output = run.Output, OutputAvailable = run.Output != null, OutputTruncated = run.OutputTruncated, DiagnosticsTruncated = run.DiagnosticsTruncated,
                 CancellationRequested = run.CancellationRequested,
-                Diagnostics = run.Diagnostics.Select(d => new BuildDiagnostic { File = d.File, Line = d.Line, Column = d.Column, Severity = d.Severity, Code = d.Code, Message = d.Message }).ToList()
+                Diagnostics = run.Diagnostics.Select((d, i) => new BuildDiagnostic { File = d.File, Line = d.Line, Column = d.Column, Severity = d.Severity, Code = d.Code, Message = d.Message,
+                    DiagnosticId = DiagnosticId(run.Id, i, d), NavigationCandidate = !baselineCurrent ? null : run.SourceBaseline.EvaluateNativeErrorItem(d.File, d.Line, d.Column, dirty, true) }).ToList()
             };
+        }
+
+        private static string DiagnosticId(Guid run, int index, BuildDiagnostic diagnostic)
+        {
+            var text = new JavaScriptSerializer().Serialize(new { build = run.ToString("D"), index, diagnostic.File, diagnostic.Line, diagnostic.Column, diagnostic.Severity, diagnostic.Code, diagnostic.Message });
+            using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(text))).Replace("-", "").ToLowerInvariant();
+        }
+
+        internal string Navigate(Guid buildId, string diagnosticId, Func<BuildDiagnostic, BuildSourceNavigationProof, bool> navigate)
+        {
+            var run = Find(buildId);
+            Validate(run);
+            if (navigate == null || run.Invalid || (run.Status != "succeeded" && run.Status != "failed") || run.SourceBaseline == null || !run.Evidence.CanPublish) return "refused";
+            var matches = run.Diagnostics.Select((d, i) => new { Diagnostic = d, Id = DiagnosticId(run.Id, i, d) }).Where(x => x.Id == diagnosticId).ToArray();
+            if (matches.Length != 1) return "refused";
+            bool invoked = false, accepted = false;
+            try
+            {
+                var diagnostic = matches[0].Diagnostic;
+                bool leased = run.SourceBaseline.TryWithNativeNavigationLease(diagnostic.File, diagnostic.Line, diagnostic.Column, dirty, proof => {
+                    run.Revalidate();
+                    invoked = true;
+                    accepted = navigate(diagnostic, proof);
+                });
+                if (!leased) return invoked ? "unknown" : "conflict";
+                run.Revalidate();
+                return accepted ? "succeeded" : "refused";
+            }
+            catch { return invoked ? "unknown" : "conflict"; }
         }
 
         private void ThrowDisposed() { if (disposed) throw new ObjectDisposedException("NativeBuildService"); }
@@ -229,6 +274,7 @@ namespace TwinCatMcp.Engineering.Host
             ide.Dispose();
             if (active != null) { active.Status = "unknown"; ClearEvidence(active); }
             active = null; runs.Clear();
+            sourceBaselines.Clear();
         }
     }
 }

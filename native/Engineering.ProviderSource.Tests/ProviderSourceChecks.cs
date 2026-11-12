@@ -74,6 +74,7 @@ static class Checks
                         ReferenceEquals(approval.Expected, context) && approval.TargetObjectId == target && approval.Section == "implementation" &&
                         approval.PreviewId == expectedPreview && approval.JournalId == expectedJournal && approval.BaselineDigest == expectedBaseline &&
                         approval.ProposedDigest == expectedProposed && approval.CanonicalRequestDigest == Hash(lastRequest) &&
+                        approval.RawRequestJson == lastRequest && Hash(approval.RawRequestJson) == approval.CanonicalRequestDigest &&
                         approval.ExpiresUtc == expectedExpiry && approval.ExpiresUtc > DateTime.UtcNow;
                 }, new Inline(), _ => active)) {
                 Func<Guid, string, object, Dictionary<string, object>> call = (id, operation, args) => {
@@ -115,6 +116,7 @@ static class Checks
                     observed.BaselineDigest == baseline && observed.ProposedDigest == proposed && observed.CanonicalRequestDigest == Hash(lastRequest) &&
                     observed.ExpiresUtc == expiry && observed.ExpiresUtc > DateTime.UtcNow, "apply approval binding");
                 Require(buffer.Text == original.Replace("a := 1;", "a := 2;") && buffer.Applies == 1, "apply exact content");
+                Require(observed.BeforeText == "a := 1;" && observed.ProposedText == "a := 2;", "approval diff comes from trusted cached preview");
                 var undoId = Guid.NewGuid(); expiry = DateTime.UtcNow.AddSeconds(90);
                 expectedOperation = undoId; expectedOperationName = "source.rollback"; expectedJournal = applyId.ToString("D");
                 expectedBaseline = proposed; expectedProposed = baseline; expectedExpiry = expiry;
@@ -124,6 +126,7 @@ static class Checks
                 Require(observed.OperationId == undoId && observed.Operation == "source.rollback" && observed.TargetObjectId == target && observed.Section == "implementation" &&
                     observed.PreviewId == previewId.ToString("D") && observed.JournalId == applyId.ToString("D") && observed.BaselineDigest == proposed && observed.ProposedDigest == baseline &&
                     observed.CanonicalRequestDigest == Hash(lastRequest) && observed.ExpiresUtc == expiry && buffer.Text == original, "rollback approval binding");
+                Require(observed.BeforeText == "a := 2;" && observed.ProposedText == "a := 1;", "rollback approval diff is trusted reverse image");
                 previewId = Guid.NewGuid(); preview = call(previewId, "source.preview", new { objectId = target, section = "implementation", proposedText = "a := 9;" }); p = Result(preview);
                 var ownEditId = Guid.NewGuid(); expiry = DateTime.UtcNow.AddSeconds(90);
                 expectedOperation = ownEditId; expectedOperationName = "source.apply"; expectedPreview = previewId.ToString("D"); expectedJournal = null;

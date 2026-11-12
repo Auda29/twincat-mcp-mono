@@ -19,10 +19,13 @@ dirty state, platform mismatch, ambiguous association, unsafe project hooks and
 nonempty or unverifiable build dependencies. Builds are nonblocking operations;
 diagnostics and output belong to an explicit build operation. Native source
 changes have a separate approval lane, exact live XML-buffer baseline, prepared
-session journal and conflict-safe rollback. Only supported already-open raw
-`.TcPOU` XML editor buffers are admitted; specialized TwinCAT editors remain
-unsupported. These implementations require host integration acceptance and do
-not constitute live-machine validation.
+session journal and conflict-safe rollback for supported already-open raw
+`.TcPOU` XML buffers. Attached normal TwinCAT ST editors support verified live
+read and read-only diff preview through the scoped host accessor. Their writes
+remain unsupported pending a proven atomic transaction contract. Compiler
+navigation uses a retained source baseline and explicit native click followed
+by an exact current ErrorItem match. These implementations require host
+integration acceptance and do not constitute live-machine validation.
 
 ## Backend Evaluation
 

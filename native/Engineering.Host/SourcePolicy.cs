@@ -64,6 +64,7 @@ namespace TwinCatMcp.Engineering.Host
         internal string SectionBaselineDigest;
         internal string SectionProposedDigest;
         internal string ProjectRevision;
+        internal string BeforeText, ProposedText;
     }
 
     internal sealed class SourceResult
@@ -250,6 +251,7 @@ namespace TwinCatMcp.Engineering.Host
                     ContextIdentity = contextIdentity, ObjectId = preview.ObjectId, Section = preview.Section,
                     PreviewId = preview.PreviewId, JournalId = preview.JournalId,
                     ProjectRevision = preview.ProjectRevision,
+                    BeforeText = preview.Before, ProposedText = preview.After,
                     BaselineDigest = Digest(preview.BeforeBuffer), ProposedDigest = Digest(preview.AfterBuffer),
                     SectionBaselineDigest = Digest(preview.Before), SectionProposedDigest = Digest(preview.After) });
             }

@@ -45,6 +45,17 @@ public static class EngineeringProviderFactory {
         Func<ApprovalRequest, bool> consumeApproval,
         SynchronizationContext ideContext,
         Func<string, object> getTextBuffer);
+    public static IEngineeringProvider CreateWithHostAccess(
+        object injectedDte, Func<string, bool?> authoritativeDirty,
+        Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval,
+        SynchronizationContext ideContext, Func<string, object> getTextBuffer,
+        Func<string, bool> navigateExactErrorItem);
+    public static IEngineeringProvider CreateWithEditorViews(
+        object injectedDte, Func<string, bool?> authoritativeDirty,
+        Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval,
+        SynchronizationContext ideContext, Func<string, object> getTextBuffer,
+        Func<string, bool> navigateExactErrorItem,
+        Func<string, string, object> getSectionEditor);
 }
 ```
 
@@ -76,6 +87,13 @@ exact UTF-8 request JSON bytes before parsing. Duplicate keys at any depth are
 rejected. Approval
 must originate in native user action. A callback refusal fails the request.
 Approval tokens and capability secrets must not be logged or returned.
+The original constructor remains available. An additive constructor appends
+get-only `RawRequestJson`, `BeforeText`, `ProposedText`, `Configuration` and
+`Platform` string properties. The JSON is the exact hashed request. Source
+images come from the cached preview or reverse journal, never caller-supplied
+diff fields. Build configuration/platform come from the exact validated request.
+The host may use this payload for an explicitly opted-in Editor-profile native
+confirmation; Analysis must never cause a mutation popup or approval grant.
 
 ## Envelope
 
@@ -95,7 +113,7 @@ Errors are sanitized and do not expose capability or approval material.
 
 Operations include `session.ping`, `session.describe`, `project.association`,
 `build.start`, `operation.get`, `operation.cancel`,
-`diagnostics.read`, `output.read`, `source.read`, `source.preview`,
+`diagnostics.read`, `diagnostics.navigate`, `output.read`, `source.targets`, `source.read`, `source.preview`,
 `source.apply`, and `source.rollback`. `build.start`, `source.apply`, and
 `source.rollback` require explicit native approval. Read calls cannot trigger
 builds or mutation. `operation.get` and `operation.cancel` use a distinct
@@ -118,9 +136,8 @@ Cancellation is best effort and does not assert that an IDE operation stopped.
 `platform`. `approvalExpiresUtc` is an ISO 8601
 UTC timestamp ending in `Z`, strictly in the future and no more than two minutes
 away. The provider passes that exact instant to `ApprovalRequest.ExpiresUtc`;
-the request digest includes the supplied timestamp. Parsed diagnostics include
-`navigationAvailable: false` because no exact project-item and source-baseline
-attestation has yet been established. A diagnostic path is not navigation proof.
+the request digest includes the supplied timestamp. A diagnostic path alone is
+not navigation proof. The navigation contract below controls clickable rows.
 `session.describe` performs read-only preflight. Only a successful preflight
 reports `capabilities.plcBuild: "supported"` with `result.configuration`,
 `result.platform`, `buildScope: "plcProject"` and `targetProjectFile` equal to
@@ -206,6 +223,95 @@ session remain retained, but does not survive provider disposal or a process
 restart. A journal does not authorize rollback; rollback needs a new native
 approval and exact current post-image. Specialized TwinCAT editor compatibility
 and live IDE acceptance remain unverified.
+
+### Attached TwinCAT ST editor reads and previews
+
+`CreateWithEditorViews` adds `Func<string,string,object> getSectionEditor` to
+the seven-argument `CreateWithHostAccess` factory. Arguments are the exact
+`objectId` above and `declaration` or `implementation`. The host returns the
+actual attached `_3S.CoDeSys.Core.Views.IEditorView`, or null. On every call it
+must verify the physical file, current qualified name, exact bound project,
+RDT cookie/document-data identity, object GUID and requested POU/method child
+slot. It must not open a document, choose a focused view or infer a section.
+For a declaration wrapper it may return the unique concrete IEC text editor
+inside that already validated slot, with the same object/project identity.
+
+The provider reflects only public types from already loaded `Core`,
+`IECTextEditor.plugin` and `TextDocument` assemblies. It verifies the exact
+GUID, pinned positive project handle and `IsDeclarationEditor()`, reads
+`GetTextDocument(false).GetText(0, Length)`, then rechecks view, editor,
+document, text, context, project revision and known dirty state. It never calls
+a text setter. A source may be dirty; its `.plcproj` must be known clean with
+verified static Compile membership. Text is bounded to 16,384 UTF-16 units.
+
+`source.targets {moniker}` accepts the canonical physical `.TcPOU` filename.
+If the raw XML adapter cannot read it, persisted GUID/name metadata supplies
+candidate IDs only. Each returned object and section must independently pass
+the attached-editor checks. Results contain `targets` with `objectId`,
+`qualifiedName`, `kind`, `sections` and `atomicWriteSupported:false`, plus
+`count`, `truncated:false`, `sourceMode:"customStReadOnly"`,
+`identitySource:"persistedObjectMetadataAndNativeView"`, `applySupported:false`,
+`source:"liveBuffer"`, `dirtyState` and `projectRevision`. Stale metadata that
+cannot be matched to the current native view produces no supported target.
+
+For this mode, `source.read` returns live `text`. `source.preview` returns
+`beforeText`, `proposedText` and `diff:{offset,deletedText,insertedText}` without
+changing the document. Both include `sourceMode:"customStReadOnly"`,
+`captureKind:"attachedTwinCatTextDocument"`, `documentDigest`,
+`proposedDocumentDigest` (null on read), `projectRevision`, `dirtyState`,
+`truncated:false`, `atomicWriteSupported:false` and `applySupported:false`.
+Provenance reports `liveBuffer` and the observed dirty state. No mutation-ready
+preview ID or whole-buffer mutation digest is issued.
+
+Normal ST custom-editor apply/rollback remain unsupported. Installed metadata
+exposes `ITextDocument` setters and `MetaObjectModifyTransaction<T>`, but does
+not establish a conditional atomic edit, editor synchronization or failure
+rollback contract. Those methods are not used as a substitute for verified
+transaction semantics. Properties and other custom editor kinds remain outside
+this supported read scope. Assembly inspection and fixtures do not establish
+live IDE acceptance.
+
+### Compiler diagnostic navigation
+
+The provider captures a bounded build-source baseline before final build
+preflight and DTE submission. It covers direct static Compile sources, exact
+project/source bytes and known-clean state, at most 256 files and 16 MiB total.
+At most four build baselines are retained; eviction disables navigation for
+that build without evicting its effectful operation/replay record. Diagnostics
+remain historical output from their explicit completed build operation.
+
+Rows carry a stable lowercase 64-hex `diagnosticId`. Eligible current rows with
+an injected host callback report `navigationAvailable:true` and
+`navigationKind:"nativeErrorItemExactMatchRequired"`. This means a native
+click can attempt an exact current ErrorItem match; it does not attest fresh
+Error List contents. Unknown, stale, ambiguous or evicted evidence disables it.
+
+`diagnostics.navigate` takes exactly `{targetOperationId,diagnosticId}`. It is
+not exposed as a model MCP tool. The native host must register an explicit
+single-use click bound to request/build/diagnostic identity before dispatch.
+`CreateWithHostAccess` adds `Func<string,bool> navigateExactErrorItem` to
+`CreateWithEditorAccess`. The provider invokes it once, on the IDE thread,
+with this bounded JSON proof:
+
+```text
+{protocolVersion:1,sessionId,requestOperationId,buildOperationId,diagnosticId,
+ expected:{idePid,ideStartedUtc,solutionFile,projectFile,contextEpoch},
+ diagnostic:{file,line,column,severity,code,message},
+ baseline:{projectFile,projectDigest,sourceFile,sourceDigest,objectId,
+           qualifiedName,memberPath,section:null,coordinateKind:"nativeErrorItem"}}
+```
+
+The project and selected source have read-only file leases through the native
+callback. All captured inputs and context are rechecked before navigation.
+Plain physical ErrorItem filenames have null object/qualified-name proof and
+empty `memberPath`; an explicit semicolon member suffix must map uniquely.
+The host must retain and recheck the unique actual COM ErrorItem and match
+file, project, coordinates, severity and exact Description before Navigate.
+There is no standalone ErrorItem code/member property. An empty code requires
+Description equal to message; a nonempty code requires the exact
+`code + ": " + message` relation. No guessed member or path-only fallback is
+allowed. Callback entry followed by loss of proof returns `unknown`, with no
+automatic retry or claim that navigation did not occur.
 
 ## Authenticated pipe framing
 

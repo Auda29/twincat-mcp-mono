@@ -36,13 +36,26 @@ namespace TwinCatMcp.Engineering.Host
         public string CanonicalRequestDigest { get; }
         public string BaselineDigest { get; }
         public string ProposedDigest { get; }
+        public string RawRequestJson { get; }
+        public string BeforeText { get; }
+        public string ProposedText { get; }
+        public string Configuration { get; }
+        public string Platform { get; }
         public ApprovalRequest(Guid sessionId, Guid operationId, string operation, HostContext expected,
             string targetObjectId, string section, string previewId, string journalId, DateTime expiresUtc,
             string canonicalRequestDigest, string baselineDigest, string proposedDigest)
+            : this(sessionId, operationId, operation, expected, targetObjectId, section, previewId, journalId, expiresUtc,
+                canonicalRequestDigest, baselineDigest, proposedDigest, null, null, null, null, null) { }
+        public ApprovalRequest(Guid sessionId, Guid operationId, string operation, HostContext expected,
+            string targetObjectId, string section, string previewId, string journalId, DateTime expiresUtc,
+            string canonicalRequestDigest, string baselineDigest, string proposedDigest,
+            string rawRequestJson, string beforeText, string proposedText, string configuration, string platform)
         { SessionId = sessionId; OperationId = operationId; Operation = operation; Expected = expected;
           TargetObjectId = targetObjectId; Section = section; PreviewId = previewId; JournalId = journalId;
           ExpiresUtc = expiresUtc; CanonicalRequestDigest = canonicalRequestDigest;
-          BaselineDigest = baselineDigest; ProposedDigest = proposedDigest; }
+          BaselineDigest = baselineDigest; ProposedDigest = proposedDigest;
+          RawRequestJson = rawRequestJson; BeforeText = beforeText; ProposedText = proposedText;
+          Configuration = configuration; Platform = platform; }
     }
 
     public interface IEngineeringProvider : IDisposable
@@ -71,6 +84,22 @@ namespace TwinCatMcp.Engineering.Host
                 throw new ArgumentNullException();
             return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext, getTextBuffer);
         }
+        public static IEngineeringProvider CreateWithHostAccess(object injectedDte, Func<string, bool?> authoritativeDirty,
+            Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval, SynchronizationContext ideContext,
+            Func<string, object> getTextBuffer, Func<string, bool> navigateExactErrorItem)
+        {
+            if (injectedDte == null || authoritativeDirty == null || currentContext == null || consumeApproval == null || ideContext == null || getTextBuffer == null || navigateExactErrorItem == null)
+                throw new ArgumentNullException();
+            return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext, getTextBuffer, navigateExactErrorItem);
+        }
+        public static IEngineeringProvider CreateWithEditorViews(object injectedDte, Func<string, bool?> authoritativeDirty,
+            Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval, SynchronizationContext ideContext,
+            Func<string, object> getTextBuffer, Func<string, bool> navigateExactErrorItem, Func<string, string, object> getSectionEditor)
+        {
+            if (injectedDte == null || authoritativeDirty == null || currentContext == null || consumeApproval == null || ideContext == null || getTextBuffer == null || navigateExactErrorItem == null || getSectionEditor == null)
+                throw new ArgumentNullException();
+            return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext, getTextBuffer, navigateExactErrorItem, getSectionEditor);
+        }
     }
 
     internal sealed class EngineeringProvider : IEngineeringProvider
@@ -81,20 +110,26 @@ namespace TwinCatMcp.Engineering.Host
         private readonly Func<string, bool?> dirty;
         private readonly Func<ApprovalRequest, bool> approval;
         private readonly Func<string, object> getTextBuffer;
+        private readonly Func<string, bool> navigateExactErrorItem;
+        private readonly Func<string, string, object> getSectionEditor;
         private SourcePolicy sources;
         private XmlStSourceEditor sourceEditor;
+        private CustomStReader customStReader;
+        private readonly HashSet<Guid> customReadPreviews = new HashSet<Guid>();
         private readonly Dictionary<Guid, SourceCall> sourceCalls = new Dictionary<Guid, SourceCall>();
         private readonly Dictionary<Guid, Tuple<string, string>> requests = new Dictionary<Guid, Tuple<string, string>>();
         private NativeBuildService builds;
         private bool disposed;
         internal EngineeringProvider(object dte, Func<string, bool?> dirty, Func<HostContext> currentContext,
-            Func<ApprovalRequest, bool> approval, SynchronizationContext ideContext, Func<string, object> getTextBuffer = null)
-        { this.dte = dte; this.dirty = dirty; this.currentContext = currentContext; this.approval = approval; this.ideContext = ideContext; this.getTextBuffer = getTextBuffer; }
+            Func<ApprovalRequest, bool> approval, SynchronizationContext ideContext, Func<string, object> getTextBuffer = null,
+            Func<string, bool> navigateExactErrorItem = null, Func<string, string, object> getSectionEditor = null)
+        { this.dte = dte; this.dirty = dirty; this.currentContext = currentContext; this.approval = approval; this.ideContext = ideContext; this.getTextBuffer = getTextBuffer;
+          this.navigateExactErrorItem = navigateExactErrorItem; this.getSectionEditor = getSectionEditor; }
 
         private sealed class SourceCall
         {
             internal Guid Session, OperationId;
-            internal string Operation, RequestDigest, Baseline, Proposed, ProjectRevision;
+            internal string Operation, RequestDigest, RawRequestJson, Baseline, Proposed, ProjectRevision;
             internal DateTime Expires;
             internal HostContext Bound;
             internal Dictionary<string, object> Expected;
@@ -181,6 +216,26 @@ namespace TwinCatMcp.Engineering.Host
             BuildSnapshot snapshot = null;
             try
             {
+                if (name == "diagnostics.navigate")
+                {
+                    Guid buildId;
+                    var diagnosticId = args != null && args.ContainsKey("diagnosticId") ? args["diagnosticId"] as string : null;
+                    if (args == null || args.Count != 2 || !args.ContainsKey("targetOperationId") || !Guid.TryParseExact(args["targetOperationId"] as string, "D", out buildId) || buildId == Guid.Empty ||
+                        diagnosticId == null || !System.Text.RegularExpressions.Regex.IsMatch(diagnosticId, "^[0-9a-f]{64}$")) return Failure(json, session, operation, "refused", "invalid_navigation_request");
+                    if (navigateExactErrorItem == null || builds == null) return Failure(json, session, operation, "unsupported", "native_navigation_unavailable");
+                    var navigationStatus = builds.Navigate(buildId, diagnosticId, (diagnostic, baseline) => {
+                        ValidateContext(expected, currentContext(), session);
+                        var payload = json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), requestOperationId = operation.ToString("D"),
+                            buildOperationId = buildId.ToString("D"), diagnosticId, expected,
+                            diagnostic = new { file = diagnostic.File, line = diagnostic.Line, column = diagnostic.Column, severity = diagnostic.Severity, code = diagnostic.Code ?? "", message = diagnostic.Message },
+                            baseline = new { projectFile = baseline.ProjectFile, projectDigest = baseline.ProjectDigest, sourceFile = baseline.SourceFile, sourceDigest = baseline.SourceDigest,
+                                objectId = baseline.ObjectId, qualifiedName = baseline.QualifiedName, memberPath = baseline.MemberPath ?? "", section = baseline.Section, coordinateKind = baseline.CoordinateKind } });
+                        if (Encoding.UTF8.GetByteCount(payload) > 16384 || disposed) return false;
+                        return navigateExactErrorItem(payload);
+                    });
+                    return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = navigationStatus,
+                        provenance = Provenance(buildId.ToString("D")), result = new { diagnosticId, navigationKind = "nativeErrorItemExactMatchRequired", navigationInvoked = navigationStatus == "succeeded" } });
+                }
                 if (name == "session.ping")
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = "succeeded",
                         provenance = Provenance(null), result = new { contextValidated = true,
@@ -200,11 +255,11 @@ namespace TwinCatMcp.Engineering.Host
                                 diagnostics = assessed != null && assessed.OutputCaptureAvailable ? "supported" : "unsupported", output = assessed != null && assessed.OutputCaptureAvailable ? "supported" : "unsupported",
                                 sourceRead = getTextBuffer == null ? "unsupported" : "conditional", sourcePreview = getTextBuffer == null ? "unsupported" : "conditional",
                                 sourceApply = getTextBuffer == null ? "unsupported" : "conditional", sourceRollback = getTextBuffer == null ? "unsupported" : "conditional" },
-                            sourceEditorKind = getTextBuffer == null ? null : "openTcPouXmlBuffer" } });
+                            sourceEditorKind = getSectionEditor != null ? "rawXmlAndAttachedCustomStReadOnly" : getTextBuffer == null ? null : "openTcPouXmlBuffer" } });
                 }
                 if (name == "source.targets" || name == "source.read" || name == "source.preview" || name == "source.apply" || name == "source.rollback" || name == "source.journal")
                 {
-                    if (getTextBuffer == null) return Failure(json, session, operation, "unsupported", "editor_access_unavailable");
+                    if (getTextBuffer == null && getSectionEditor == null) return Failure(json, session, operation, "unsupported", "editor_access_unavailable");
                     if (args == null) return Failure(json, session, operation, "refused", "invalid_source_arguments");
                     var source = SourceService(current);
                     SourceResult result;
@@ -212,6 +267,7 @@ namespace TwinCatMcp.Engineering.Host
                     {
                         if (args.Count != 1 || !args.ContainsKey("moniker")) return Failure(json, session, operation, "refused", "invalid_source_arguments");
                         result = sourceEditor.Targets(args["moniker"] as string);
+                        if (result.Status != "succeeded" && getSectionEditor != null) result = CustomReader(current).Targets(args["moniker"] as string) ?? result;
                     }
                     else if (name == "source.read" || name == "source.preview")
                     {
@@ -219,6 +275,23 @@ namespace TwinCatMcp.Engineering.Host
                             return Failure(json, session, operation, "refused", "invalid_source_arguments");
                         result = name == "source.read" ? source.Read(args["objectId"] as string, args["section"] as string)
                             : source.Preview(operation.ToString("D"), args["objectId"] as string, args["section"] as string, args.ContainsKey("proposedText") ? args["proposedText"] as string : null);
+                        if (result.Status != "succeeded" && getSectionEditor != null)
+                        {
+                            var attached = name == "source.read" ? CustomReader(current).Read(args["objectId"] as string, args["section"] as string)
+                                : CustomReader(current).Preview(args["objectId"] as string, args["section"] as string, args.ContainsKey("proposedText") ? args["proposedText"] as string : null);
+                            if (attached != null)
+                            {
+                                if (name == "source.preview") customReadPreviews.Add(operation);
+                                result = new SourceResult("succeeded", result: new Dictionary<string, object> {
+                                    { "objectId", attached.ObjectId }, { "section", attached.Section }, { "text", attached.Text },
+                                    { "beforeText", attached.Text }, { "proposedText", attached.ProposedText }, { "documentDigest", attached.Digest },
+                                    { "proposedDocumentDigest", attached.ProposedDigest }, { "projectRevision", attached.ProjectRevision },
+                                    { "dirtyState", attached.DirtyState }, { "source", "liveBuffer" }, { "captureKind", "attachedTwinCatTextDocument" },
+                                    { "sourceMode", "customStReadOnly" }, { "atomicWriteSupported", false }, { "applySupported", false }, { "truncated", false },
+                                    { "diff", name == "source.preview" ? new { offset = attached.ChangeOffset, deletedText = attached.DeletedText, insertedText = attached.InsertedText } : null }
+                                });
+                            }
+                        }
                     }
                     else if (name == "source.journal")
                     {
@@ -232,8 +305,9 @@ namespace TwinCatMcp.Engineering.Host
                         if (args.Count != 5 || !args.ContainsKey(idKey) || !Guid.TryParseExact(args[idKey] as string, "D", out referenced) || referenced == Guid.Empty ||
                             !args.ContainsKey("approvalExpiresUtc") || !args.ContainsKey("baselineDigest") || !args.ContainsKey("proposedDigest") || !args.ContainsKey("projectRevision"))
                             return Failure(json, session, operation, "refused", "invalid_source_arguments");
+                        if (customReadPreviews.Contains(referenced)) return Failure(json, session, operation, "unsupported", "custom_editor_atomic_transaction_unverified");
                         var auth = new SourceCall { Session = session, OperationId = operation, Operation = name, Bound = current, Expected = expected,
-                            RequestDigest = Hash(requestJson), Expires = ParseExpiry(args["approvalExpiresUtc"] as string),
+                            RequestDigest = Hash(requestJson), RawRequestJson = requestJson, Expires = ParseExpiry(args["approvalExpiresUtc"] as string),
                             Baseline = args["baselineDigest"] as string, Proposed = args["proposedDigest"] as string, ProjectRevision = args["projectRevision"] as string };
                         sourceCalls.Add(operation, auth);
                         result = name == "source.apply" ? source.Apply(operation.ToString("D"), referenced.ToString("D")) : source.Rollback(operation.ToString("D"), referenced.ToString("D"));
@@ -270,7 +344,7 @@ namespace TwinCatMcp.Engineering.Host
                         expires.UtcDateTime <= DateTime.UtcNow || expires.UtcDateTime > DateTime.UtcNow.AddMinutes(2))
                         throw new NativeBuildException("refused", "invalid_approval_expiry");
                     var requestApproval = new ApprovalRequest(session, operation, name, current, current.ProjectFile, null, null, null,
-                        expires.UtcDateTime, Hash(requestJson), null, null);
+                        expires.UtcDateTime, Hash(requestJson), null, null, requestJson, null, null, configuration, platform);
                     snapshot = BuildService().Start(operation, current.SolutionFile, current.ProjectFile,
                         () => ValidateContext(expected, currentContext(), session),
                         () => { if (!approval(requestApproval) || DateTime.UtcNow >= expires.UtcDateTime) throw new NativeBuildException("refused", "approval_denied_or_expired"); },
@@ -291,8 +365,12 @@ namespace TwinCatMcp.Engineering.Host
                             cancellationRequested = snapshot.CancellationRequested, outputAvailable = snapshot.OutputAvailable, outputTruncated = snapshot.OutputTruncated,
                             diagnosticsTruncated = snapshot.DiagnosticsTruncated }, output = snapshot.Output,
                         diagnostics = snapshot.Diagnostics.Select(d => new { file = d.File, severity = d.Severity, message = d.Message,
-                            code = d.Code, line = d.Line, column = d.Column, navigationAvailable = false,
-                            navigationReason = "No verified project source item and baseline are available." }).ToArray() });
+                            code = d.Code, line = d.Line, column = d.Column, diagnosticId = d.DiagnosticId,
+                            navigationAvailable = navigateExactErrorItem != null && d.NavigationCandidate != null && d.NavigationCandidate.Status == "candidate",
+                            navigationKind = d.NavigationCandidate != null && d.NavigationCandidate.Status == "candidate" ? "nativeErrorItemExactMatchRequired" : null,
+                            navigationReason = navigateExactErrorItem == null ? "Native click navigation is unavailable." : d.NavigationCandidate == null ? "Build source baseline is unavailable or stale." : d.NavigationCandidate.Status,
+                            sourceBaseline = d.NavigationCandidate == null ? null : new { projectDigest = d.NavigationCandidate.ProjectSha256, sourceFile = d.NavigationCandidate.File, sourceDigest = d.NavigationCandidate.FileSha256,
+                                objectId = d.NavigationCandidate.ObjectId.HasValue ? d.NavigationCandidate.ObjectId.Value.ToString("D") : null, qualifiedName = d.NavigationCandidate.QualifiedName, memberPath = d.NavigationCandidate.MemberPath ?? "" } }).ToArray() });
             }
             catch (NativeBuildException e)
             {
@@ -349,10 +427,17 @@ namespace TwinCatMcp.Engineering.Host
                         if (!Guid.TryParseExact(spec.OperationId, "D", out id) || !sourceCalls.TryGetValue(id, out call) || !SourceAuthorizationCurrent(spec.OperationId) ||
                             call.Operation != spec.Operation || call.Baseline != spec.BaselineDigest || call.Proposed != spec.ProposedDigest || call.ProjectRevision != spec.ProjectRevision) return false;
                         return approval(new ApprovalRequest(call.Session, id, call.Operation, call.Bound, spec.ObjectId, spec.Section, spec.PreviewId, spec.JournalId,
-                            call.Expires, call.RequestDigest, spec.BaselineDigest, spec.ProposedDigest));
+                            call.Expires, call.RequestDigest, spec.BaselineDigest, spec.ProposedDigest,
+                            call.RawRequestJson, spec.BeforeText, spec.ProposedText, null, null));
                     }, SourceAuthorizationCurrent);
             }
             return sources;
+        }
+
+        private CustomStReader CustomReader(HostContext bound)
+        {
+            if (customStReader == null) customStReader = new CustomStReader(bound.ProjectFile, getSectionEditor, dirty, ContextKey, ContextKey());
+            return customStReader;
         }
 
         private bool SourceAuthorizationCurrent(string operationId)
