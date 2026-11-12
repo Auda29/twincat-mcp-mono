@@ -21,6 +21,9 @@ namespace TwinCatMcp.Engineering.Host
             if (xml.Descendants().Count(n => n.Name.LocalName == "Import") != 1) Refuse();
             foreach (var node in xml.Descendants())
             {
+                // Property functions can execute code without an explicit target.
+                if (node.Value.IndexOf("$([", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    node.Attributes().Any(a => a.Value.IndexOf("$([", StringComparison.OrdinalIgnoreCase) >= 0)) Refuse();
                 var name = node.Name.LocalName.ToLowerInvariant();
                 if (name == "sdk" || name.Contains("dependson") || name.EndsWith("targets", StringComparison.Ordinal) ||
                     name.StartsWith("msbuildextensionspath", StringComparison.Ordinal) || name == "directorybuildpropspath" || name == "directorybuildtargetspath" ||

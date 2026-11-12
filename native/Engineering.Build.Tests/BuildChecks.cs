@@ -25,6 +25,12 @@ internal static class BuildChecks
         Expect(BuildEvidence.Parse(string.Join("\n", Enumerable.Repeat("Main(1,1): error C1: Bad", 120)), out truncated).Count == 100 && truncated, "bounded diagnostics");
 
         var now = DateTime.UtcNow;
+        var approvalIde = new FakeIde();
+        using (var guarded = new NativeBuildService(approvalIde, _ => false, () => now))
+        {
+            Throws(() => guarded.Start(Guid.NewGuid(), "a.sln", "a.plcproj", () => { }, () => approvalIde.FailPrepare = true), "refused", "post-approval safety preflight");
+            Expect(approvalIde.Starts == 0, "changed project never submits");
+        }
         var ide = new FakeIde();
         using (var service = new NativeBuildService(ide, _ => false, () => now))
         {
@@ -96,6 +102,8 @@ internal static class BuildChecks
             Throws(() => BuildProjectPolicy.Validate(file), "refused", "custom target refused");
             File.WriteAllText(file, "<Project><PropertyGroup><prebuildEvent>bad</prebuildEvent></PropertyGroup>" + import + "</Project>");
             Throws(() => BuildProjectPolicy.Validate(file), "refused", "case insensitive build hook refused");
+            File.WriteAllText(file, "<Project><PropertyGroup><Any>$([System.IO.File]::ReadAllText('x'))</Any></PropertyGroup>" + import + "</Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "MSBuild property function refused");
             File.WriteAllText(file, "<Project>" + import + "</Project>");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project />");
             Throws(() => BuildProjectPolicy.Validate(file), "refused", "ancestor hook refused");
@@ -120,7 +128,8 @@ internal static class BuildChecks
         internal string Output = "old Main(1,1): error C1: stale\n";
         internal int Starts;
         internal bool FailStart;
-        public BuildTarget Prepare(string solution, string project, Func<string, bool?> dirty) { return new BuildTarget { UniqueName = "project", Configuration = "Debug", Platform = "TwinCAT RT (x86)" }; }
+        internal bool FailPrepare;
+        public BuildTarget Prepare(string solution, string project, Func<string, bool?> dirty) { if (FailPrepare) throw new NativeBuildException("refused", "unsafe"); return new BuildTarget { UniqueName = "project", Configuration = "Debug", Platform = "TwinCAT RT (x86)" }; }
         public bool IsCurrent(BuildTarget target, string solution, string project) { return true; }
         public string ReadOutput() { return Output; }
         public void Start(BuildTarget target) { Starts++; IsBuilding = true; if (FailStart) throw new Exception(); }
