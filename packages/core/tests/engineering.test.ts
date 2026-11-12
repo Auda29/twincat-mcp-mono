@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -338,7 +338,13 @@ describe("engineering project context", () => {
       expect(main.pou.provenance).toEqual({
         source: "configuredProjectFile",
         editorState: "unknown",
+        fileDigestSha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+        textRepresentation: "normalizedSections",
       });
+      writeFileSync(main.pou.sourceFile, Buffer.concat([readFileSync(main.pou.sourceFile), Buffer.from("\n")]));
+      const changedFileSnapshot = engineering.plcReadPou({ pou: "MAIN" }).pou;
+      expect(changedFileSnapshot.rawText).toBe(main.pou.rawText);
+      expect(changedFileSnapshot.provenance.fileDigestSha256).not.toBe(main.pou.provenance.fileDigestSha256);
       expect(main.pou.declaration).toContain("PROGRAM MAIN");
       expect(main.pou.implementation).toContain("fbValve.Open");
 

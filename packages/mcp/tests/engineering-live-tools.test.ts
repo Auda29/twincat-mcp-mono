@@ -39,10 +39,12 @@ describe("explicit live engineering tools", () => {
       status: "succeeded", provenance: { source: "unknown", dirtyState: "unknown", buildOperationId: null },
       result: { solutionFile: context.solutionFile, plcProjectFile: context.projectFile,
         twinCatProjectFile: "C:\\fixture\\a.tsproj", associationCount: 1, owningTwinCatPlcChildCount: 2,
+        mappingDigest: "a".repeat(64), observedAtUtc: "2026-11-12T09:00:00Z", observationConsistency: "selectedMappingRechecked",
         buildScopeStatus: "unknown", captureKind: "automationSnapshot", editorState: "unknown", dirtyState: "unknown" },
     }));
     expect(await tool("tc_project_association").execute({})).toMatchObject({
-      status: "succeeded", result: { associationCount: 1, owningTwinCatPlcChildCount: 2, buildScopeStatus: "unknown" },
+      status: "succeeded", result: { associationCount: 1, owningTwinCatPlcChildCount: 2, buildScopeStatus: "unknown",
+        mappingDigest: "a".repeat(64), observationConsistency: "selectedMappingRechecked" },
     });
     expect(JSON.parse(dispatch.mock.calls[0]![0])).toMatchObject({ operation: "project.association", arguments: {} });
     expect(dispatch).toHaveBeenCalledTimes(1);

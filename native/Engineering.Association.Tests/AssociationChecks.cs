@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 using TwinCatMcp.Engineering.Host;
 
 internal static class AssociationChecks
@@ -30,6 +32,11 @@ internal static class AssociationChecks
         Expect(result.PlcProjectFile == Plc && result.SolutionFile == Solution, "bound identities retained");
         Expect(result.OwningTwinCatPlcChildCount == 1 && result.BuildScopeStatus == "unknown", "direct child count does not attest build scope");
         Expect(result.Source == "unknown" && result.CaptureKind == "automationSnapshot" && result.EditorState == "unknown" && result.DirtyState == "unknown", "mapping cannot attest source buffers");
+        var expectedXml = Project(@"C:\fixture\B.tsproj", Plc).Manager.Children[0].Xml;
+        string expectedDigest;
+        using (var sha = SHA256.Create()) expectedDigest = string.Concat(sha.ComputeHash(Encoding.UTF8.GetBytes(expectedXml)).Select(b => b.ToString("x2")));
+        DateTime observed;
+        Expect(result.MappingDigest == expectedDigest && DateTime.TryParse(result.ObservedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out observed) && observed.Kind == DateTimeKind.Utc, "digest covers exact UTF8 mapping and observation time is UTC");
         Expect(fixture.ValidationCalls == fixture.AccessCalls + 1, "all automation reads revalidate context");
         Expect(fixture.Calls.All(call => call == "Item" || call == "LookupTreeItem" || call == "ProduceXml"), "only mapping methods invoked");
 
@@ -38,9 +45,12 @@ internal static class AssociationChecks
         fixture = new Fixture(Project(@"C:\fixture\A.tsproj", @"C:\other\a.plcproj"));
         result = fixture.Resolve();
         Expect(result.Status == "refused" && result.AssociationCount == 0 && result.TwinCatProjectFile == null, "same filename cannot select other project");
+        Expect(result.ObservationConsistency == null, "no-match result does not claim selected mapping recheck");
+        Expect(result.MappingDigest == null && result.ObservedAtUtc == null, "unselected mapping has no evidence");
         fixture = new Fixture(Project(@"C:\fixture\A.tsproj", Plc), Project(@"C:\fixture\B.tsproj", Plc));
         result = fixture.Resolve();
         Expect(result.Status == "conflict" && result.AssociationCount == 2 && result.TwinCatProjectFile == null, "multiple containers fail closed with exact count");
+        Expect(result.ObservationConsistency == null, "ambiguous result does not claim selected mapping recheck");
         fixture = new Fixture(Project(@"C:\fixture\A.tsproj", Plc, Plc));
         Expect(fixture.Resolve().Status == "conflict", "duplicate PLC nodes fail closed");
         Expect(fixture.Resolve().OwningTwinCatPlcChildCount == null, "ambiguous owner exposes no selected child count");
@@ -94,6 +104,18 @@ internal static class AssociationChecks
         Throws(() => fixture.Resolve(), "unsupported", "unsupported manager interface fails closed");
         fixture = new Fixture(Project(@"C:\fixture\A.tsproj", Plc)) { InvalidateAfter = 12 };
         Throws(() => fixture.Resolve(), "conflict", "mid-read context change refused");
+        var changing = Project(@"C:\fixture\A.tsproj", Plc);
+        fixture = new Fixture(changing) { BeforeSecondXml = () => changing.Manager.Children[0].Xml = "<TreeItem><PlcDef><ProjectPath>" + Plc + "</ProjectPath></PlcDef> </TreeItem>" };
+        Throws(() => fixture.Resolve(), "conflict", "XML-only mapping change refused");
+        changing = Project(@"C:\fixture\A.tsproj", Plc);
+        fixture = new Fixture(changing) { BeforeSecondXml = () => changing.Manager.Children[0].Xml = "<TreeItem><PlcDef><ProjectPath>C:\\other\\a.plcproj</ProjectPath></PlcDef></TreeItem>" };
+        Throws(() => fixture.Resolve(), "conflict", "ProjectPath change refused");
+        changing = Project(@"C:\fixture\A.tsproj", Plc);
+        fixture = new Fixture(changing) { BeforeThirdFileName = () => changing.File = @"C:\fixture\Changed.tsproj" };
+        Throws(() => fixture.Resolve(), "conflict", "selected tsproj path change refused");
+        changing = Project(@"C:\fixture\A.tsproj", Plc);
+        fixture = new Fixture(changing) { BeforeSecondChildCount = () => changing.Manager.Children.Add(new Node()) };
+        Throws(() => fixture.Resolve(), "conflict", "selected tree membership change refused");
         Throws(() => new PlcProjectAssociationService(new object()).Resolve(Solution, Plc, () => { }), "unsupported", "missing loaded interop fails closed");
         Console.WriteLine("Association checks passed: " + checks);
         return 0;
@@ -112,6 +134,8 @@ internal static class AssociationChecks
         internal bool Valid = true, Supported = true;
         internal int InvalidateAfter = int.MaxValue;
         internal int ValidationCalls, AccessCalls;
+        internal int XmlReads, FileNameReads, ChildCountReads;
+        internal Action BeforeSecondXml, BeforeThirdFileName, BeforeSecondChildCount;
         internal readonly List<string> Calls = new List<string>();
         internal Fixture(params Node[] projects) { this.projects = projects.ToList(); }
         internal PlcProjectAssociationResult Resolve()
@@ -129,12 +153,12 @@ internal static class AssociationChecks
             var node = (Node)target;
             switch (member)
             {
-                case "FileName": return node.File;
+                case "FileName": if (++FileNameReads == 3 && BeforeThirdFileName != null) BeforeThirdFileName(); return node.File;
                 case "Kind": return node.Kind;
                 case "ProjectItems": return node.Children;
                 case "SubProject": return node;
                 case "Object": return node.Manager;
-                case "ChildCount": return node.Children.Count;
+                case "ChildCount": if (++ChildCountReads == 2 && BeforeSecondChildCount != null) BeforeSecondChildCount(); return node.Children.Count;
                 case "Child": return node.Children[(int)indexes[0] - 1];
                 default: throw new Exception("Unexpected property: " + member);
             }
@@ -144,7 +168,7 @@ internal static class AssociationChecks
             ReadAccess(); Calls.Add(member);
             if (member == "Item") return ((List<Node>)target)[(int)args[0] - 1];
             if (member == "LookupTreeItem") { if ((string)args[0] != "TIPC") throw new Exception(); return target; }
-            if (member == "ProduceXml") { if (args.Length != 1 || !(args[0] is bool) || (bool)args[0]) throw new Exception(); return ((Node)target).Xml; }
+            if (member == "ProduceXml") { if (args.Length != 1 || !(args[0] is bool) || (bool)args[0]) throw new Exception(); if (++XmlReads == 2 && BeforeSecondXml != null) BeforeSecondXml(); return ((Node)target).Xml; }
             throw new Exception("Unexpected method: " + member);
         }
     }

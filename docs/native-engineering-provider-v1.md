@@ -116,6 +116,16 @@ attestation has yet been established. A diagnostic path is not navigation proof.
 solution. It reports `solutionFile`, `plcProjectFile`, `twinCatProjectFile`
 (only for a unique match), `associationCount`, `owningTwinCatPlcChildCount`,
 `buildScopeStatus`, `captureKind`, `editorState`, and `dirtyState`.
+Successful results also include `mappingDigest`, lowercase SHA-256 of the
+exact selected XML string encoded as UTF-8, and `observedAtUtc`, a UTC timestamp.
+`observationConsistency: "selectedMappingRechecked"` means the provider
+reacquired the selected owner and rechecked its path, direct child count and
+selected mapping XML before returning. This is a sequential observation.
+It does not detect every concurrent change, including a duplicate mapping added
+to a different owner after the initial scan, a change that reverts between reads,
+or a change after the last check. It is not an atomic solution snapshot or a
+source-file/editor baseline. The digest, timestamp and consistency label are null
+on non-success.
 The child count covers direct `TIPC` children of the unique owner. It does not
 describe dependencies or attest build scope; `buildScopeStatus` is `unknown`.
 Only the unnamespaced `TreeItem/PlcDef/ProjectPath` XML shape is supported.

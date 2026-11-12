@@ -172,6 +172,8 @@ namespace TwinCatMcp.Engineering.Host
                         result = new { solutionFile = association.SolutionFile, plcProjectFile = association.PlcProjectFile,
                             twinCatProjectFile = association.TwinCatProjectFile, associationCount = association.AssociationCount,
                             owningTwinCatPlcChildCount = association.OwningTwinCatPlcChildCount, buildScopeStatus = association.BuildScopeStatus,
+                            mappingDigest = association.MappingDigest, observedAtUtc = association.ObservedAtUtc,
+                            observationConsistency = association.ObservationConsistency,
                             captureKind = association.CaptureKind, editorState = association.EditorState, dirtyState = association.DirtyState } });
                 }
                 if (name == "build.start")

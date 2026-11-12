@@ -43,6 +43,16 @@ The file-backed prototype classifies common TwinCAT PLC objects as:
 Classification is conservative and based on file extension, XML element names,
 and common TwinCAT metadata such as `SpecialFunc`, `PouType`, or `Type`.
 
+## Source evidence
+
+POU summaries and reads report `provenance.source: "configuredProjectFile"`
+and `editorState: "unknown"`. `fileDigestSha256` hashes the exact bytes read
+from the source file. Embedded members share their containing file's digest.
+`textRepresentation: "normalizedSections"` identifies the extracted display
+text, which trims section whitespace and joins section content. The file digest
+does not hash that transformed text and does not establish a compiled baseline.
+These reads do not inspect live IDE buffers or authorize source changes.
+
 ## Boundaries
 
 The tools are intentionally read-only and separate from ADS runtime symbol

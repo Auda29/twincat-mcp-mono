@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   existsSync,
   readFileSync,
@@ -220,6 +221,9 @@ export interface EngineeringPlcPouSummary {
   readonly provenance: {
     readonly source: "configuredProjectFile";
     readonly editorState: "unknown";
+    /** Digest of the exact source-file bytes read, not of the display sections. */
+    readonly fileDigestSha256: string;
+    readonly textRepresentation: "normalizedSections";
   };
   readonly project: EngineeringProjectSummary;
 }
@@ -2764,7 +2768,9 @@ export class EngineeringService {
       return [];
     }
 
-    const rawXml = readFileSync(sourceFile, "utf8");
+    const sourceBytes = readFileSync(sourceFile);
+    const rawXml = sourceBytes.toString("utf8");
+    const fileDigestSha256 = createHash("sha256").update(sourceBytes).digest("hex");
     const parsed = xmlParser.parse(rawXml) as unknown;
     return collectPlcObjectElements(parsed).map((entry, index) => {
       const name = plcObjectName(sourceFile, entry.element);
@@ -2803,7 +2809,7 @@ export class EngineeringService {
         kind,
         path: `/${project.name}/${qualifiedName}`,
         sourceFile,
-        provenance: { source: "configuredProjectFile", editorState: "unknown" },
+        provenance: { source: "configuredProjectFile", editorState: "unknown", fileDigestSha256, textRepresentation: "normalizedSections" },
         project,
         declaration,
         implementation,

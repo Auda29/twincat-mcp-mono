@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 using System.Xml;
 using System.Xml.Linq;
 
@@ -25,6 +27,9 @@ namespace TwinCatMcp.Engineering.Host
         public string TwinCatProjectFile { get; set; }
         public int AssociationCount { get; set; }
         public int? OwningTwinCatPlcChildCount { get; set; }
+        public string MappingDigest { get; set; }
+        public string ObservedAtUtc { get; set; }
+        public string ObservationConsistency { get { return Status == "succeeded" ? "selectedMappingRechecked" : null; } }
         public string BuildScopeStatus { get { return "unknown"; } }
         public string Source { get { return "unknown"; } }
         public string CaptureKind { get { return "automationSnapshot"; } }
@@ -63,6 +68,10 @@ namespace TwinCatMcp.Engineering.Host
                 int matches = 0;
                 string matchedTwinCatFile = null;
                 int? matchedOwnerPlcCount = null;
+                object matchedProject = null;
+                int matchedChildIndex = 0;
+                string matchedXml = null;
+                string matchedPath = null;
                 var projectPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 int plcBudget = 512;
                 foreach (var project in projects)
@@ -87,10 +96,54 @@ namespace TwinCatMcp.Engineering.Host
                         matches++;
                         matchedTwinCatFile = twinCatFile;
                         matchedOwnerPlcCount = count;
+                        matchedProject = project;
+                        matchedChildIndex = i;
+                        matchedXml = xml;
+                        matchedPath = path;
                     }
                 }
+                if (matches == 1)
+                {
+                    try
+                    {
+                    // Reacquire the project from the injected solution and re-read its
+                    // current TIPC tree, not a previously obtained child reference.
+                    var recheckSolution = Get(access.Dte, "EnvDTE.DTE", "Solution", revalidateContext);
+                    if (!SameFile(Text(Get(recheckSolution, "EnvDTE.Solution", "FullName", revalidateContext)), solutionFile)) Conflict("solution_changed");
+                    var currentProjects = new List<object>();
+                    int recheckBudget = 512;
+                    CollectProjects(Get(recheckSolution, "EnvDTE.Solution", "Projects", revalidateContext), currentProjects, ref recheckBudget, revalidateContext);
+                    var candidates = new List<object>();
+                    foreach (var currentProject in currentProjects)
+                    {
+                        var currentFile = Text(Get(currentProject, "EnvDTE.Project", "FileName", revalidateContext));
+                        if (SameFile(currentFile, matchedTwinCatFile))
+                        {
+                            if (!string.Equals(currentFile, matchedTwinCatFile, StringComparison.Ordinal)) Conflict("plc_association_changed");
+                            candidates.Add(currentProject);
+                        }
+                    }
+                    if (candidates.Count != 1) Conflict("plc_association_changed");
+                    matchedProject = candidates[0];
+                    var currentManager = Get(matchedProject, "EnvDTE.Project", "Object", revalidateContext);
+                    Validate(revalidateContext);
+                    if (!access.Supports(currentManager, "TCatSysManagerLib.ITcSysManager")) Conflict("plc_association_changed");
+                    var currentRoot = Call(currentManager, "TCatSysManagerLib.ITcSysManager", "LookupTreeItem", revalidateContext, "TIPC");
+                    if (Number(Get(currentRoot, "TCatSysManagerLib.ITcSmTreeItem", "ChildCount", revalidateContext)) != matchedOwnerPlcCount) Conflict("plc_association_changed");
+                    var currentChild = Get(currentRoot, "TCatSysManagerLib.ITcSmTreeItem", "Child", revalidateContext, matchedChildIndex);
+                    var currentXml = Text(Call(currentChild, "TCatSysManagerLib.ITcSmTreeItem", "ProduceXml", revalidateContext, false));
+                    if (!string.Equals(currentXml, matchedXml, StringComparison.Ordinal) || !string.Equals(ProjectPath(currentXml), matchedPath, StringComparison.Ordinal)) Conflict("plc_association_changed");
+                    }
+                    catch (PlcProjectAssociationException error)
+                    {
+                        if (error.Status == "unsupported") Conflict("plc_association_changed");
+                        throw;
+                    }
+                    catch { Conflict("plc_association_changed"); }
+                }
                 // Recheck the actual injected solution as well as the host epoch.
-                if (!SameFile(Text(Get(solution, "EnvDTE.Solution", "FullName", revalidateContext)), solutionFile)) Conflict("solution_changed");
+                var currentSolution = Get(access.Dte, "EnvDTE.DTE", "Solution", revalidateContext);
+                if (!SameFile(Text(Get(currentSolution, "EnvDTE.Solution", "FullName", revalidateContext)), solutionFile)) Conflict("solution_changed");
                 Validate(revalidateContext);
                 return new PlcProjectAssociationResult {
                     Status = matches == 1 ? "succeeded" : matches == 0 ? "refused" : "conflict",
@@ -99,7 +152,9 @@ namespace TwinCatMcp.Engineering.Host
                     AssociationCount = matches,
                     // Direct TIPC children only. Project dependencies and actual
                     // BuildProject scope have not been enumerated or verified.
-                    OwningTwinCatPlcChildCount = matches == 1 ? matchedOwnerPlcCount : null
+                    OwningTwinCatPlcChildCount = matches == 1 ? matchedOwnerPlcCount : null,
+                    MappingDigest = matches == 1 ? Digest(matchedXml) : null,
+                    ObservedAtUtc = matches == 1 ? DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) : null
                 };
             }
             catch (PlcProjectAssociationException) { throw; }
@@ -146,6 +201,11 @@ namespace TwinCatMcp.Engineering.Host
         { Validate(validate); return access.Call(target, type, member, args); }
         private static void Validate(Action validate) { try { validate(); } catch { Conflict("association_context_changed"); } }
         private static string Text(object value) { return value as string; }
+        private static string Digest(string value)
+        {
+            using (var sha256 = SHA256.Create())
+                return string.Concat(sha256.ComputeHash(Encoding.UTF8.GetBytes(value)).Select(b => b.ToString("x2", CultureInfo.InvariantCulture)));
+        }
         private static int Number(object value) { return Convert.ToInt32(value, CultureInfo.InvariantCulture); }
         private static bool SameFile(string left, string right) { return string.Equals(left, right, StringComparison.OrdinalIgnoreCase); }
         private static bool CanonicalFile(string path, string extension)
