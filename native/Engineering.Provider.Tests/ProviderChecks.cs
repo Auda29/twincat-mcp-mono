@@ -28,7 +28,9 @@ internal static class ProviderChecks
             Require((string)distant["status"] == "refused" && (string)distant["error"] == "invalid_approval_expiry", "long approvals rejected");
             var malformed = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = "not-a-date" });
             Require((string)malformed["status"] == "refused", "malformed approval rejected");
+            var valid = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddSeconds(90).ToString("o") });
+            Require((string)valid["status"] == "unsupported" && (string)valid["error"] == "unverified_build_scope", "unverified build scope remains disabled");
         }
-        Console.WriteLine("Provider checks passed: 303"); return 0;
+        Console.WriteLine("Provider checks passed: 304"); return 0;
     }
 }

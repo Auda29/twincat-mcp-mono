@@ -10,7 +10,8 @@ Current limitation: Beckhoff documents `SolutionBuild.BuildProject` targeting
 the DTE TwinCAT `.tsproj`; the bound `.plcproj` is located through the TwinCAT
 tree rather than directly through DTE. The present build adapter searches DTE for
 the bound `.plcproj`, so it may refuse normal projects and has not been verified
-to build one. A `.tsproj` build must not be represented as a PLC-only build.
+to build one. `build.start` is disabled pending a verified target and separately
+approved scope. A `.tsproj` build must not be represented as a PLC-only build.
 `plc_build_project` is unsupported until a separately scoped command is verified.
 The documented path distinction is described in [Beckhoff's project-path
 documentation](https://infosys.beckhoff.com/content/1033/tc3_automationinterface/21842608907.html).

@@ -161,7 +161,7 @@ namespace TwinCatMcp.Engineering.Host
                 if (name == "session.ping" || name == "session.describe")
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = "succeeded",
                         provenance = Provenance(null), result = new { contextValidated = true,
-                            capabilities = new { build = "conditional", diagnostics = "conditional", output = "conditional", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
+                            capabilities = new { build = "unsupported", plcBuild = "unsupported", diagnostics = "unsupported", output = "unsupported", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
                 if (name == "build.start")
                 {
                     DateTimeOffset expires;
@@ -171,25 +171,7 @@ namespace TwinCatMcp.Engineering.Host
                         !DateTimeOffset.TryParse(expiresText, CultureInfo.InvariantCulture, DateTimeStyles.None, out expires) || expires.Offset != TimeSpan.Zero ||
                         expires.UtcDateTime <= DateTime.UtcNow || expires.UtcDateTime > DateTime.UtcNow.AddMinutes(2))
                         throw new NativeBuildException("refused", "invalid_approval_expiry");
-                    var fingerprint = Hash(requestJson);
-                    string previous;
-                    if (submitted.TryGetValue(operation, out previous))
-                    {
-                        if (previous != fingerprint || builds == null) throw new NativeBuildException("refused", "operation_id_reused");
-                        snapshot = builds.Get(operation);
-                    }
-                    else
-                    {
-                        if (submitted.Count >= 128) throw new NativeBuildException("refused", "operation_limit");
-                        if (builds == null) builds = new NativeBuildService(dte, dirty);
-                        var requestApproval = new ApprovalRequest(session, operation, name, current, current.ProjectFile, null, null, null,
-                            expires.UtcDateTime, fingerprint, null, null);
-                        // Mark before submission; no retry after an uncertain outcome.
-                        submitted.Add(operation, fingerprint);
-                        snapshot = builds.Start(operation, current.SolutionFile, current.ProjectFile,
-                            () => ValidateContext(expected, currentContext(), session),
-                            () => { if (!approval(requestApproval) || DateTime.UtcNow >= requestApproval.ExpiresUtc) throw new NativeBuildException("refused", "approval_denied_or_expired"); });
-                    }
+                    throw new NativeBuildException("unsupported", "unverified_build_scope");
                 }
                 else if (name == "operation.get" || name == "operation.cancel" || name == "output.read" || name == "diagnostics.read")
                 {
