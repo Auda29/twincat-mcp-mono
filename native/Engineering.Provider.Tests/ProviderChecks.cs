@@ -25,14 +25,14 @@ internal static class ProviderChecks
             var description = call(Guid.NewGuid(), "session.describe", new { });
             var capabilities = (Dictionary<string, object>)((Dictionary<string, object>)description["result"])["capabilities"];
             Require((string)capabilities["plcBuild"] == "unsupported" && (string)capabilities["sourceRead"] == "unsupported", "capabilities are honest");
-            var expired = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddMinutes(-1).ToString("o") });
+            var expired = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddMinutes(-1).ToString("o"), configuration = "Debug", platform = "TwinCAT RT (x86)" });
             Require((string)expired["status"] == "refused" && (string)expired["error"] == "invalid_approval_expiry", "expired approvals rejected");
-            var distant = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddMinutes(4).ToString("o") });
+            var distant = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddMinutes(4).ToString("o"), configuration = "Debug", platform = "TwinCAT RT (x86)" });
             Require((string)distant["status"] == "refused" && (string)distant["error"] == "invalid_approval_expiry", "long approvals rejected");
-            var malformed = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = "not-a-date" });
+            var malformed = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = "not-a-date", configuration = "Debug", platform = "TwinCAT RT (x86)" });
             Require((string)malformed["status"] == "refused", "malformed approval rejected");
-            var valid = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddSeconds(90).ToString("o") });
-            Require((string)valid["status"] == "unsupported" && (string)valid["error"] == "unverified_build_scope", "unverified build scope remains disabled");
+            var valid = call(Guid.NewGuid(), "build.start", new { approvalExpiresUtc = DateTime.UtcNow.AddSeconds(90).ToString("o"), configuration = "Debug", platform = "TwinCAT RT (x86)" });
+            Require((string)valid["status"] == "unsupported" && (string)valid["error"] == "build_events_unavailable", "unavailable host fails closed");
         }
         Console.WriteLine("Provider checks passed: 305"); return 0;
     }

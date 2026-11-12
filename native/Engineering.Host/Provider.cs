@@ -60,6 +60,17 @@ namespace TwinCatMcp.Engineering.Host
                 consumeApproval == null || ideContext == null) throw new ArgumentNullException();
             return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext);
         }
+
+        // The callback must return the exact already-open RDT/MEF document buffer
+        // from this bound IDE, or null. It must never open or save a document.
+        public static IEngineeringProvider CreateWithEditorAccess(object injectedDte, Func<string, bool?> authoritativeDirty,
+            Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval,
+            SynchronizationContext ideContext, Func<string, object> getTextBuffer)
+        {
+            if (injectedDte == null || authoritativeDirty == null || currentContext == null || consumeApproval == null || ideContext == null || getTextBuffer == null)
+                throw new ArgumentNullException();
+            return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext, getTextBuffer);
+        }
     }
 
     internal sealed class EngineeringProvider : IEngineeringProvider
@@ -69,13 +80,25 @@ namespace TwinCatMcp.Engineering.Host
         private readonly object dte;
         private readonly Func<string, bool?> dirty;
         private readonly Func<ApprovalRequest, bool> approval;
-        private readonly Dictionary<Guid, string> submitted = new Dictionary<Guid, string>();
+        private readonly Func<string, object> getTextBuffer;
+        private SourcePolicy sources;
+        private XmlStSourceEditor sourceEditor;
+        private readonly Dictionary<Guid, SourceCall> sourceCalls = new Dictionary<Guid, SourceCall>();
         private readonly Dictionary<Guid, Tuple<string, string>> requests = new Dictionary<Guid, Tuple<string, string>>();
         private NativeBuildService builds;
         private bool disposed;
         internal EngineeringProvider(object dte, Func<string, bool?> dirty, Func<HostContext> currentContext,
-            Func<ApprovalRequest, bool> approval, SynchronizationContext ideContext)
-        { this.dte = dte; this.dirty = dirty; this.currentContext = currentContext; this.approval = approval; this.ideContext = ideContext; }
+            Func<ApprovalRequest, bool> approval, SynchronizationContext ideContext, Func<string, object> getTextBuffer = null)
+        { this.dte = dte; this.dirty = dirty; this.currentContext = currentContext; this.approval = approval; this.ideContext = ideContext; this.getTextBuffer = getTextBuffer; }
+
+        private sealed class SourceCall
+        {
+            internal Guid Session, OperationId;
+            internal string Operation, RequestDigest, Baseline, Proposed, ProjectRevision;
+            internal DateTime Expires;
+            internal HostContext Bound;
+            internal Dictionary<string, object> Expected;
+        }
 
         public Task<string> DispatchAsync(string requestJson, CancellationToken cancellationToken)
         {
@@ -109,7 +132,7 @@ namespace TwinCatMcp.Engineering.Host
             // Observations never consume the non-evicting mutation replay budget.
             // Their UUIDs are not cached: repeating a poll obtains a fresh view.
             if (requestedName == "session.ping" || requestedName == "session.describe" ||
-                requestedName == "project.association" || requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read")
+                requestedName == "project.association" || requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read" || requestedName == "source.journal" || requestedName == "source.targets")
             {
                 try { return DispatchValidated(requestJson, request, json, session, operation); }
                 catch { return Failure(json, session, operation, "unknown", "dispatch_failed"); }
@@ -138,11 +161,11 @@ namespace TwinCatMcp.Engineering.Host
                 provenance = Provenance(null), error });
         }
 
-        private object Provenance(string buildOperationId)
+        private object Provenance(string buildOperationId, string source = "unknown", string dirtyState = "unknown")
         {
             HostContext observed = null;
             try { observed = currentContext(); } catch { }
-            return new { source = "unknown", dirtyState = "unknown", observedAt = DateTime.UtcNow.ToString("o"), buildOperationId,
+            return new { source, dirtyState, observedAt = DateTime.UtcNow.ToString("o"), buildOperationId,
                 context = observed == null ? null : new { sessionId = observed.SessionId.ToString("D"), idePid = observed.IdePid,
                     ideStartedUtc = observed.IdeStartedUtc.ToUniversalTime().ToString("o"), solutionFile = observed.SolutionFile,
                     projectFile = observed.ProjectFile, contextEpoch = observed.ContextEpoch } };
@@ -158,10 +181,69 @@ namespace TwinCatMcp.Engineering.Host
             BuildSnapshot snapshot = null;
             try
             {
-                if (name == "session.ping" || name == "session.describe")
+                if (name == "session.ping")
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = "succeeded",
                         provenance = Provenance(null), result = new { contextValidated = true,
-                            capabilities = new { projectAssociation = "conditional", build = "unsupported", plcBuild = "unsupported", diagnostics = "unsupported", output = "unsupported", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
+                            capabilities = new { projectAssociation = "conditional", build = "unassessed", plcBuild = "unassessed", diagnostics = "unassessed", output = "unassessed", sourceRead = "unsupported", sourcePreview = "unsupported", sourceApply = "unsupported", sourceRollback = "unsupported" } } });
+                if (name == "session.describe")
+                {
+                    BuildTarget assessed = null; string reason = null;
+                    try { assessed = BuildService().Assess(current.SolutionFile, current.ProjectFile, () => ValidateContext(expected, currentContext(), session)); }
+                    catch (NativeBuildException e) { reason = e.Code; }
+                    catch (PlcProjectAssociationException e) { reason = e.Code; }
+                    catch { reason = "build_preflight_unavailable"; }
+                    ValidateContext(expected, currentContext(), session);
+                    return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = "succeeded",
+                        provenance = Provenance(null), result = new { contextValidated = true, configuration = assessed == null ? null : assessed.Configuration,
+                            platform = assessed == null ? null : assessed.Platform, buildScope = "plcProject", targetProjectFile = current.ProjectFile, buildUnavailableReason = reason,
+                            capabilities = new { projectAssociation = "conditional", build = assessed == null ? "unsupported" : "supported", plcBuild = assessed == null ? "unsupported" : "supported",
+                                diagnostics = assessed != null && assessed.OutputCaptureAvailable ? "supported" : "unsupported", output = assessed != null && assessed.OutputCaptureAvailable ? "supported" : "unsupported",
+                                sourceRead = getTextBuffer == null ? "unsupported" : "conditional", sourcePreview = getTextBuffer == null ? "unsupported" : "conditional",
+                                sourceApply = getTextBuffer == null ? "unsupported" : "conditional", sourceRollback = getTextBuffer == null ? "unsupported" : "conditional" },
+                            sourceEditorKind = getTextBuffer == null ? null : "openTcPouXmlBuffer" } });
+                }
+                if (name == "source.targets" || name == "source.read" || name == "source.preview" || name == "source.apply" || name == "source.rollback" || name == "source.journal")
+                {
+                    if (getTextBuffer == null) return Failure(json, session, operation, "unsupported", "editor_access_unavailable");
+                    if (args == null) return Failure(json, session, operation, "refused", "invalid_source_arguments");
+                    var source = SourceService(current);
+                    SourceResult result;
+                    if (name == "source.targets")
+                    {
+                        if (args.Count != 1 || !args.ContainsKey("moniker")) return Failure(json, session, operation, "refused", "invalid_source_arguments");
+                        result = sourceEditor.Targets(args["moniker"] as string);
+                    }
+                    else if (name == "source.read" || name == "source.preview")
+                    {
+                        if (args.Count != (name == "source.read" ? 2 : 3) || !args.ContainsKey("objectId") || !args.ContainsKey("section"))
+                            return Failure(json, session, operation, "refused", "invalid_source_arguments");
+                        result = name == "source.read" ? source.Read(args["objectId"] as string, args["section"] as string)
+                            : source.Preview(operation.ToString("D"), args["objectId"] as string, args["section"] as string, args.ContainsKey("proposedText") ? args["proposedText"] as string : null);
+                    }
+                    else if (name == "source.journal")
+                    {
+                        if (args.Count != 1 || !args.ContainsKey("journalId")) return Failure(json, session, operation, "refused", "invalid_source_arguments");
+                        result = source.GetJournal(args["journalId"] as string);
+                    }
+                    else
+                    {
+                        var idKey = name == "source.apply" ? "previewId" : "journalId";
+                        Guid referenced;
+                        if (args.Count != 5 || !args.ContainsKey(idKey) || !Guid.TryParseExact(args[idKey] as string, "D", out referenced) || referenced == Guid.Empty ||
+                            !args.ContainsKey("approvalExpiresUtc") || !args.ContainsKey("baselineDigest") || !args.ContainsKey("proposedDigest") || !args.ContainsKey("projectRevision"))
+                            return Failure(json, session, operation, "refused", "invalid_source_arguments");
+                        var auth = new SourceCall { Session = session, OperationId = operation, Operation = name, Bound = current, Expected = expected,
+                            RequestDigest = Hash(requestJson), Expires = ParseExpiry(args["approvalExpiresUtc"] as string),
+                            Baseline = args["baselineDigest"] as string, Proposed = args["proposedDigest"] as string, ProjectRevision = args["projectRevision"] as string };
+                        sourceCalls.Add(operation, auth);
+                        result = name == "source.apply" ? source.Apply(operation.ToString("D"), referenced.ToString("D")) : source.Rollback(operation.ToString("D"), referenced.ToString("D"));
+                    }
+                    object observedSource, observedDirty;
+                    var isLive = result.Status == "succeeded" && result.Result != null && result.Result.TryGetValue("source", out observedSource) && (string)observedSource == "liveBuffer";
+                    var sourceDirty = result.Result != null && result.Result.TryGetValue("dirtyState", out observedDirty) ? observedDirty as string : "unknown";
+                    return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = result.Status,
+                        provenance = Provenance(null, isLive ? "liveBuffer" : "unknown", sourceDirty ?? "unknown"), error = result.ErrorCode, result = result.Result });
+                }
                 if (name == "project.association")
                 {
                     if (args == null || args.Count != 0) throw new PlcProjectAssociationException("refused", "invalid_association_arguments");
@@ -180,12 +262,20 @@ namespace TwinCatMcp.Engineering.Host
                 {
                     DateTimeOffset expires;
                     var expiresText = args != null && args.ContainsKey("approvalExpiresUtc") ? args["approvalExpiresUtc"] as string : null;
-                    if (args == null || args.Count != 1 || string.IsNullOrEmpty(expiresText) ||
+                    var configuration = args != null && args.ContainsKey("configuration") ? args["configuration"] as string : null;
+                    var platform = args != null && args.ContainsKey("platform") ? args["platform"] as string : null;
+                    if (args == null || args.Count != 3 || string.IsNullOrEmpty(configuration) || string.IsNullOrEmpty(platform) || string.IsNullOrEmpty(expiresText) ||
                         !System.Text.RegularExpressions.Regex.IsMatch(expiresText, @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$") ||
                         !DateTimeOffset.TryParse(expiresText, CultureInfo.InvariantCulture, DateTimeStyles.None, out expires) || expires.Offset != TimeSpan.Zero ||
                         expires.UtcDateTime <= DateTime.UtcNow || expires.UtcDateTime > DateTime.UtcNow.AddMinutes(2))
                         throw new NativeBuildException("refused", "invalid_approval_expiry");
-                    throw new NativeBuildException("unsupported", "unverified_build_scope");
+                    var requestApproval = new ApprovalRequest(session, operation, name, current, current.ProjectFile, null, null, null,
+                        expires.UtcDateTime, Hash(requestJson), null, null);
+                    snapshot = BuildService().Start(operation, current.SolutionFile, current.ProjectFile,
+                        () => ValidateContext(expected, currentContext(), session),
+                        () => { if (!approval(requestApproval) || DateTime.UtcNow >= expires.UtcDateTime) throw new NativeBuildException("refused", "approval_denied_or_expired"); },
+                        configuration, platform,
+                        () => { if (disposed || DateTime.UtcNow >= expires.UtcDateTime) throw new NativeBuildException("refused", "approval_expired_or_disposed"); });
                 }
                 else if (name == "operation.get" || name == "operation.cancel" || name == "output.read" || name == "diagnostics.read")
                 {
@@ -221,6 +311,55 @@ namespace TwinCatMcp.Engineering.Host
         private static string Hash(string value)
         {
             using (var sha = SHA256.Create()) return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value))).Replace("-", "").ToLowerInvariant();
+        }
+
+        private NativeBuildService BuildService()
+        {
+            if (builds == null) builds = new NativeBuildService(dte, dirty);
+            return builds;
+        }
+
+        private static DateTime ParseExpiry(string text)
+        {
+            DateTimeOffset value;
+            if (string.IsNullOrEmpty(text) || !System.Text.RegularExpressions.Regex.IsMatch(text, @"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$") ||
+                !DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.None, out value) || value.Offset != TimeSpan.Zero ||
+                value.UtcDateTime <= DateTime.UtcNow || value.UtcDateTime > DateTime.UtcNow.AddMinutes(2)) throw new NativeBuildException("refused", "invalid_approval_expiry");
+            return value.UtcDateTime;
+        }
+
+        private string ContextKey()
+        {
+            if (disposed) return null;
+            var c = currentContext();
+            if (c == null) return null;
+            return Hash(new JavaScriptSerializer().Serialize(new { session = c.SessionId.ToString("D"), c.IdePid, started = c.IdeStartedUtc.ToUniversalTime().Ticks,
+                c.SolutionFile, c.ProjectFile, c.ContextEpoch }));
+        }
+
+        private SourcePolicy SourceService(HostContext bound)
+        {
+            if (sources == null)
+            {
+                var key = ContextKey();
+                sourceEditor = new XmlStSourceEditor(bound.ProjectFile, getTextBuffer, dirty, ContextKey, key);
+                sources = new SourcePolicy(sourceEditor, ContextKey,
+                    spec => {
+                        Guid id; SourceCall call;
+                        if (!Guid.TryParseExact(spec.OperationId, "D", out id) || !sourceCalls.TryGetValue(id, out call) || !SourceAuthorizationCurrent(spec.OperationId) ||
+                            call.Operation != spec.Operation || call.Baseline != spec.BaselineDigest || call.Proposed != spec.ProposedDigest || call.ProjectRevision != spec.ProjectRevision) return false;
+                        return approval(new ApprovalRequest(call.Session, id, call.Operation, call.Bound, spec.ObjectId, spec.Section, spec.PreviewId, spec.JournalId,
+                            call.Expires, call.RequestDigest, spec.BaselineDigest, spec.ProposedDigest));
+                    }, SourceAuthorizationCurrent);
+            }
+            return sources;
+        }
+
+        private bool SourceAuthorizationCurrent(string operationId)
+        {
+            Guid id; SourceCall call;
+            if (!Guid.TryParseExact(operationId, "D", out id) || !sourceCalls.TryGetValue(id, out call)) return false;
+            try { ValidateContext(call.Expected, currentContext(), call.Session); return !disposed && DateTime.UtcNow < call.Expires; } catch { return false; }
         }
 
         private static void ValidateContext(Dictionary<string, object> expected, HostContext current, Guid session)

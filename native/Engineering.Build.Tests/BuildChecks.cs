@@ -25,6 +25,16 @@ internal static class BuildChecks
         Expect(BuildEvidence.Parse(string.Join("\n", Enumerable.Repeat("Main(1,1): error C1: Bad", 120)), out truncated).Count == 100 && truncated, "bounded diagnostics");
 
         var now = DateTime.UtcNow;
+        Expect(BuildDteAdapter.MatchesPlcPath(@"C:\fixture\a.sln", @"PLC\a.plcproj", @"C:\fixture\PLC\a.plcproj"), "PLC context path maps to exact bound file");
+        Expect(!BuildDteAdapter.MatchesPlcPath(@"C:\fixture\a.sln", @"Other\a.plcproj", @"C:\fixture\PLC\a.plcproj"), "same basename cannot select build target");
+        var expiredIde = new FakeIde();
+        using (var guarded = new NativeBuildService(expiredIde, _ => false, () => now))
+        {
+            Throws(() => guarded.Start(Guid.NewGuid(), "a.sln", "a.plcproj", () => { }, null, "Release", "TwinCAT RT (x86)"), "conflict", "requested configuration cannot be substituted");
+            var expiry = now.AddSeconds(1);
+            var result = guarded.Start(Guid.NewGuid(), "a.sln", "a.plcproj", () => { }, () => now = expiry, "Debug", "TwinCAT RT (x86)", () => { if (now >= expiry) throw new Exception(); });
+            Expect(result.Status == "refused" && expiredIde.Starts == 0, "expired authorization never submits after second preflight");
+        }
         var approvalIde = new FakeIde();
         using (var guarded = new NativeBuildService(approvalIde, _ => false, () => now))
         {

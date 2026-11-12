@@ -4,13 +4,16 @@ using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.IO;
 
 namespace TwinCatMcp.Engineering.Host
 {
     internal sealed class BuildTarget
     {
         internal string UniqueName, Configuration, Platform;
+        internal string ProjectFile, OwningProjectFile, MappingDigest;
         internal object Project;
+        internal bool OutputCaptureAvailable;
     }
 
     internal interface IBuildIde : IDisposable
@@ -116,42 +119,96 @@ namespace TwinCatMcp.Engineering.Host
             if (IsBuilding) Refuse("build_already_running");
             var solution = Solution;
             if (!Same((string)Get(solution, "Solution", "FullName"), solutionFile) || !(bool)Get(solution, "Solution", "Saved")) Refuse("solution_not_clean");
+            var association = new PlcProjectAssociationService(dte).Resolve(solutionFile, projectFile, () => {
+                if (!Same((string)Get(Solution, "Solution", "FullName"), solutionFile)) Refuse("solution_changed");
+            });
+            if (association.Status != "succeeded") Refuse("unverified_plc_association");
             var matches = new List<object>();
             var budget = 512;
-            foreach (var project in Items(Get(solution, "Solution", "Projects"), "Projects", 512)) Find(project, projectFile, matches, ref budget, 0);
+            foreach (var project in Items(Get(solution, "Solution", "Projects"), "Projects", 512)) Find(project, association.TwinCatProjectFile, matches, ref budget, 0);
             if (matches.Count != 1) Refuse("ambiguous_build_project");
-            if (dirty == null || dirty(projectFile) != false || dirty(solutionFile) != false) Refuse("unknown_dirty_state");
+            if (dirty == null || dirty(projectFile) != false || dirty(solutionFile) != false || dirty(association.TwinCatProjectFile) != false) Refuse("unknown_dirty_state");
             foreach (var document in Items(Get(dte, "DTE", "Documents"), "Documents", 256))
                 if (!(bool)Get(document, "Document", "Saved") || dirty((string)Get(document, "Document", "FullName")) != false) Refuse("dirty_or_unknown_document");
             BuildProjectPolicy.Validate(projectFile);
             var found = matches[0];
             var active = Get(SolutionBuild, "SolutionBuild", "ActiveConfiguration");
             var target = new BuildTarget {
-                Project = found, UniqueName = (string)Get(found, "Project", "UniqueName"), Configuration = (string)Get(active, "SolutionConfiguration", "Name"),
-                Platform = (string)Get(Get(Get(found, "Project", "ConfigurationManager"), "ConfigurationManager", "ActiveConfiguration"), "Configuration", "PlatformName")
+                Project = found, ProjectFile = projectFile, OwningProjectFile = association.TwinCatProjectFile, MappingDigest = association.MappingDigest,
+                Configuration = (string)Get(active, "SolutionConfiguration", "Name"),
+                Platform = CurrentTargetPlatform(found)
             };
             if ((target.Configuration != "Debug" && target.Configuration != "Release") ||
                 (target.Platform != "TwinCAT RT (x86)" && target.Platform != "TwinCAT RT (x64)")) Refuse("unsupported_build_configuration");
+            if (SolutionPlatform(active) != target.Platform) Refuse("solution_platform_mismatch");
             int contexts = 0;
             foreach (var context in Items(Get(active, "SolutionConfiguration", "SolutionContexts"), "SolutionContexts", 512))
             {
-                if (!Same((string)Get(context, "SolutionContext", "ProjectName"), target.UniqueName)) continue;
+                var contextName = (string)Get(context, "SolutionContext", "ProjectName");
+                if (!MatchesPlcPath(solutionFile, contextName, projectFile)) continue;
                 contexts++;
+                target.UniqueName = contextName;
                 if (!(bool)Get(context, "SolutionContext", "ShouldBuild") || (string)Get(context, "SolutionContext", "ConfigurationName") != target.Configuration ||
                     (string)Get(context, "SolutionContext", "PlatformName") != target.Platform) Refuse("build_configuration_mismatch");
             }
             if (contexts != 1) Refuse("ambiguous_build_configuration");
+            RequireNoDependencies(target.UniqueName);
             return target;
+        }
+
+        internal static bool MatchesPlcPath(string solutionFile, string contextName, string projectFile)
+        {
+            try { return !string.IsNullOrEmpty(contextName) && Same(Path.GetFullPath(Path.IsPathRooted(contextName) ? contextName : Path.Combine(Path.GetDirectoryName(solutionFile), contextName)), projectFile); }
+            catch { return false; }
+        }
+
+        private void RequireNoDependencies(string uniqueName)
+        {
+            try
+            {
+                var dependency = Call(Get(SolutionBuild, "SolutionBuild", "BuildDependencies"), "BuildDependencies", "Item", uniqueName);
+                var owner = Get(dependency, "BuildDependency", "Project");
+                if (!Same((string)Get(owner, "Project", "UniqueName"), uniqueName)) Refuse("dependency_identity_mismatch");
+                var required = Get(dependency, "BuildDependency", "RequiredProjects") as Array;
+                if (required == null || required.Length != 0) Refuse("build_dependencies_not_supported");
+            }
+            catch (NativeBuildException) { throw; }
+            catch { throw new NativeBuildException("unsupported", "build_dependency_evidence_unavailable"); }
+        }
+
+        private string CurrentTargetPlatform(object project)
+        {
+            var manager = Get(project, "Project", "Object");
+            var config = TcGet(manager, "ITcSysManager7", "ConfigurationManager");
+            return (string)TcGet(config, "ITcConfigManager", "ActiveTargetPlatform");
+        }
+
+        private static string SolutionPlatform(object configuration)
+        {
+            var types = AppDomain.CurrentDomain.GetAssemblies().Where(a => a.GetName().Name == "EnvDTE80" || a.GetName().Name == "Microsoft.VisualStudio.Interop")
+                .Select(a => a.GetType("EnvDTE80.SolutionConfiguration2", false)).Where(t => t != null).Distinct().ToArray();
+            if (types.Length != 1 || configuration == null || !types[0].IsInstanceOfType(configuration)) throw new NativeBuildException("unsupported", "solution_platform_evidence_unavailable");
+            return (string)DeclaringType(types[0], "PlatformName").InvokeMember("PlatformName", BindingFlags.GetProperty, null, configuration, new object[0], CultureInfo.InvariantCulture);
+        }
+
+        private static object TcGet(object instance, string typeName, string member)
+        {
+            var types = AppDomain.CurrentDomain.GetAssemblies().Where(a => a.GetName().Name == "TCatSysManagerLib" || a.GetName().Name == "Interop.TCatSysManagerLib")
+                .Select(a => a.GetType("TCatSysManagerLib." + typeName, false)).Where(t => t != null).Distinct().ToArray();
+            if (types.Length != 1 || instance == null || !types[0].IsInstanceOfType(instance)) throw new NativeBuildException("unsupported", "build_platform_evidence_unavailable");
+            return DeclaringType(types[0], member).InvokeMember(member, BindingFlags.GetProperty, null, instance, new object[0], CultureInfo.InvariantCulture);
         }
 
         private void Find(object project, string file, List<object> matches, ref int budget, int depth)
         {
             if (--budget < 0 || depth > 8) Refuse("build_project_limit");
             if (!(bool)Get(project, "Project", "Saved")) Refuse("project_not_saved");
-            var fullName = (string)Get(project, "Project", "FullName");
+            var fullName = (string)Get(project, "Project", "FileName");
             if (Same(fullName, file)) matches.Add(project);
+            if ((fullName ?? "").EndsWith(".tsproj", StringComparison.OrdinalIgnoreCase)) return;
+            if (!Same((string)Get(project, "Project", "Kind"), "{66A26720-8FB5-11D2-AA7E-00C04F688DDE}")) return;
             var items = Get(project, "Project", "ProjectItems");
-            if (items == null || (fullName ?? "").EndsWith(".plcproj", StringComparison.OrdinalIgnoreCase)) return;
+            if (items == null) return;
             foreach (var item in Items(items, "ProjectItems", 512))
             {
                 if (--budget < 0) Refuse("build_project_limit");
@@ -162,10 +219,14 @@ namespace TwinCatMcp.Engineering.Host
 
         public bool IsCurrent(BuildTarget target, string solutionFile, string projectFile)
         {
-            return Same((string)Get(Solution, "Solution", "FullName"), solutionFile) && Same((string)Get(target.Project, "Project", "FullName"), projectFile) &&
-                Same((string)Get(target.Project, "Project", "UniqueName"), target.UniqueName) &&
+            var association = new PlcProjectAssociationService(dte).Resolve(solutionFile, projectFile, () => {
+                if (!Same((string)Get(Solution, "Solution", "FullName"), solutionFile)) Refuse("solution_changed");
+            });
+            return association.Status == "succeeded" && Same(association.TwinCatProjectFile, target.OwningProjectFile) && association.MappingDigest == target.MappingDigest &&
+                Same((string)Get(Solution, "Solution", "FullName"), solutionFile) && Same((string)Get(target.Project, "Project", "FileName"), target.OwningProjectFile) &&
                 (string)Get(Get(SolutionBuild, "SolutionBuild", "ActiveConfiguration"), "SolutionConfiguration", "Name") == target.Configuration &&
-                (string)Get(Get(Get(target.Project, "Project", "ConfigurationManager"), "ConfigurationManager", "ActiveConfiguration"), "Configuration", "PlatformName") == target.Platform;
+                SolutionPlatform(Get(SolutionBuild, "SolutionBuild", "ActiveConfiguration")) == target.Platform &&
+                CurrentTargetPlatform(target.Project) == target.Platform;
         }
 
         public string ReadOutput()
@@ -182,7 +243,7 @@ namespace TwinCatMcp.Engineering.Host
             return (string)Call(edit, "EditPoint", "GetText", end);
         }
 
-        public void Start(BuildTarget target) { Call(SolutionBuild, "SolutionBuild", "BuildProject", target.Configuration + "|" + target.Platform, target.UniqueName, false); }
+        public void Start(BuildTarget target) { Call(SolutionBuild, "SolutionBuild", "BuildProject", target.Configuration + "|" + target.Platform, target.ProjectFile, false); }
         private static bool Same(string a, string b) { return string.Equals(a, b, StringComparison.OrdinalIgnoreCase); }
         private static void Refuse(string code) { throw new NativeBuildException("refused", code); }
         private static void Unsupported() { throw new NativeBuildException("unsupported", "build_events_unavailable"); }

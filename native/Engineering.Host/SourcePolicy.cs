@@ -5,8 +5,8 @@ using System.Text;
 
 namespace TwinCatMcp.Engineering.Host
 {
-    // This seam is internal. The shipped provider has no verified editor adapter.
-    // DTE text setters alone cannot establish the required atomic transaction.
+    // This seam is internal. The production XML adapter uses the host's exact
+    // RDT buffer and a modern ITextEdit transaction; DTE setters are not used.
     internal interface ISourceEditor
     {
         bool HasVerifiedAtomicLiveBufferSemantics { get; }
@@ -25,6 +25,11 @@ namespace TwinCatMcp.Engineering.Host
         internal string ObjectId;
         internal string Section;
         internal string Text;
+        internal string BufferText;
+        internal string ProjectRevision;
+        internal string DirtyState;
+        internal object BufferIdentity;
+        internal Func<string, string> BuildReplacement;
         internal bool IsExistingStructuredTextObject;
         internal bool IsUnambiguousIdentity;
         internal bool IsVerifiedLiveBuffer;
@@ -38,6 +43,11 @@ namespace TwinCatMcp.Engineering.Host
         internal string Section;
         internal string ExpectedText;
         internal string ReplacementText;
+        internal string ExpectedBufferText;
+        internal string ReplacementBufferText;
+        internal string ProjectRevision;
+        internal object BufferIdentity;
+        internal Func<bool> AuthorizationCurrent;
     }
 
     internal sealed class SourceApproval
@@ -49,6 +59,11 @@ namespace TwinCatMcp.Engineering.Host
         internal string Section;
         internal string BaselineDigest;
         internal string ProposedDigest;
+        internal string PreviewId;
+        internal string JournalId;
+        internal string SectionBaselineDigest;
+        internal string SectionProposedDigest;
+        internal string ProjectRevision;
     }
 
     internal sealed class SourceResult
@@ -75,12 +90,13 @@ namespace TwinCatMcp.Engineering.Host
     /// </summary>
     internal sealed class SourcePolicy
     {
-        private const int MaxTextLength = 65536;
+        private const int MaxTextLength = 16384;
         private const int MaxOperations = 128;
         private readonly object gate = new object();
         private readonly ISourceEditor editor;
         private readonly Func<string> currentContextIdentity;
         private readonly Func<SourceApproval, bool> consumeApproval;
+        private readonly Func<string, bool> authorizationCurrent;
         private readonly string contextIdentity;
         private readonly Dictionary<string, SourcePreview> previews = new Dictionary<string, SourcePreview>(StringComparer.Ordinal);
         private readonly Dictionary<string, SourceJournal> journals = new Dictionary<string, SourceJournal>(StringComparer.Ordinal);
@@ -89,12 +105,14 @@ namespace TwinCatMcp.Engineering.Host
         internal SourcePolicy(Func<string> currentContextIdentity, Func<SourceApproval, bool> consumeApproval)
             : this(new SourceUnsupportedEditor(), currentContextIdentity, consumeApproval) { }
 
-        internal SourcePolicy(ISourceEditor editor, Func<string> currentContextIdentity, Func<SourceApproval, bool> consumeApproval)
+        internal SourcePolicy(ISourceEditor editor, Func<string> currentContextIdentity, Func<SourceApproval, bool> consumeApproval,
+            Func<string, bool> authorizationCurrent = null)
         {
             if (editor == null || currentContextIdentity == null || consumeApproval == null) throw new ArgumentNullException();
             this.editor = editor;
             this.currentContextIdentity = currentContextIdentity;
             this.consumeApproval = consumeApproval;
+            this.authorizationCurrent = authorizationCurrent;
             contextIdentity = currentContextIdentity();
             if (string.IsNullOrWhiteSpace(contextIdentity)) throw new ArgumentException("A frozen context identity is required.");
         }
@@ -111,6 +129,7 @@ namespace TwinCatMcp.Engineering.Host
                 return new SourceResult("succeeded", result: new Dictionary<string, object> {
                     { "objectId", objectId }, { "section", section }, { "text", snapshot.Text },
                     { "digest", Digest(snapshot.Text) }, { "source", "liveBuffer" }, { "truncated", false }
+                    , { "dirtyState", snapshot.DirtyState ?? "unknown" }, { "bufferDigest", Digest(snapshot.BufferText) }, { "projectRevision", snapshot.ProjectRevision }
                 });
             }
         }
@@ -127,14 +146,40 @@ namespace TwinCatMcp.Engineering.Host
                     SourceSnapshot snapshot;
                     check = ReadVerified(objectId, section, out snapshot);
                     if (check != null) return check;
-                    var preview = new SourcePreview { ObjectId = objectId, Section = section,
-                        Before = snapshot.Text, After = proposedText };
+                    string proposedBuffer;
+                    try { proposedBuffer = snapshot.BuildReplacement(proposedText); }
+                    catch { return Refused("source_replacement_unmappable"); }
+                    if (!ValidBuffer(proposedBuffer)) return Refused("source_replacement_unmappable");
+                    var preview = new SourcePreview { ObjectId = objectId, Section = section, PreviewId = previewOperationId,
+                        Before = snapshot.Text, After = proposedText, BeforeBuffer = snapshot.BufferText, AfterBuffer = proposedBuffer,
+                        ProjectRevision = snapshot.ProjectRevision, BufferIdentity = snapshot.BufferIdentity };
                     previews.Add(previewOperationId, preview);
                     return new SourceResult("succeeded", result: new Dictionary<string, object> {
                         { "previewOperationId", previewOperationId }, { "objectId", objectId }, { "section", section },
-                        { "baselineDigest", Digest(preview.Before) }, { "proposedDigest", Digest(preview.After) },
+                        { "baselineDigest", Digest(preview.BeforeBuffer) }, { "proposedDigest", Digest(preview.AfterBuffer) },
+                        { "sectionBaselineDigest", Digest(preview.Before) }, { "sectionProposedDigest", Digest(preview.After) },
+                        { "beforeText", preview.Before }, { "proposedText", preview.After }, { "projectRevision", preview.ProjectRevision },
+                        { "dirtyState", snapshot.DirtyState ?? "unknown" },
                         { "source", "liveBuffer" }, { "truncated", false }
                     });
+                });
+            }
+        }
+
+        internal SourceResult GetJournal(string applyOperationId)
+        {
+            lock (gate) {
+                if (!ContextMatches()) return Refused("stale_context");
+                applyOperationId = CanonicalId(applyOperationId);
+                SourceJournal journal;
+                if (applyOperationId == null || !journals.TryGetValue(applyOperationId, out journal)) return Refused("journal_not_found");
+                var p = journal.Preview;
+                return new SourceResult("succeeded", result: new Dictionary<string, object> {
+                    { "journalOperationId", applyOperationId }, { "previewOperationId", p.PreviewId },
+                    { "objectId", p.ObjectId }, { "section", p.Section }, { "outcome", journal.Outcome },
+                    { "rollbackSubmitted", journal.RollbackSubmitted }, { "rollbackOutcome", journal.RollbackOutcome },
+                    { "beforeText", p.Before }, { "proposedText", p.After }, { "projectRevision", p.ProjectRevision },
+                    { "baselineDigest", Digest(p.BeforeBuffer) }, { "proposedDigest", Digest(p.AfterBuffer) }
                 });
             }
         }
@@ -177,7 +222,9 @@ namespace TwinCatMcp.Engineering.Host
                     var check = CheckTarget(forward.ObjectId, forward.Section);
                     if (check != null) return check;
                     var reverse = new SourcePreview { ObjectId = forward.ObjectId, Section = forward.Section,
-                        Before = forward.After, After = forward.Before };
+                        PreviewId = forward.PreviewId, JournalId = applyOperationId, Before = forward.After, After = forward.Before,
+                        BeforeBuffer = forward.AfterBuffer, AfterBuffer = forward.BeforeBuffer, ProjectRevision = forward.ProjectRevision,
+                        BufferIdentity = forward.BufferIdentity };
                     return Mutate(operationId, "source.rollback", reverse,
                         () => {
                             if (journal.RollbackSubmitted) return false;
@@ -193,15 +240,22 @@ namespace TwinCatMcp.Engineering.Host
             SourceSnapshot current;
             var check = ReadVerified(preview.ObjectId, preview.Section, out current);
             if (check != null) return check;
-            if (!string.Equals(current.Text, preview.Before, StringComparison.Ordinal)) return new SourceResult("conflict", "baseline_changed");
+            if (!string.Equals(current.Text, preview.Before, StringComparison.Ordinal) ||
+                !string.Equals(current.BufferText, preview.BeforeBuffer, StringComparison.Ordinal) ||
+                !string.Equals(current.ProjectRevision, preview.ProjectRevision, StringComparison.Ordinal) ||
+                !ReferenceEquals(current.BufferIdentity, preview.BufferIdentity)) return new SourceResult("conflict", "baseline_changed");
             bool approved;
             try {
                 approved = consumeApproval(new SourceApproval { OperationId = operationId, Operation = operation,
                     ContextIdentity = contextIdentity, ObjectId = preview.ObjectId, Section = preview.Section,
-                    BaselineDigest = Digest(preview.Before), ProposedDigest = Digest(preview.After) });
+                    PreviewId = preview.PreviewId, JournalId = preview.JournalId,
+                    ProjectRevision = preview.ProjectRevision,
+                    BaselineDigest = Digest(preview.BeforeBuffer), ProposedDigest = Digest(preview.AfterBuffer),
+                    SectionBaselineDigest = Digest(preview.Before), SectionProposedDigest = Digest(preview.After) });
             }
             catch { return Refused("approval_unavailable"); }
             if (!approved) return Refused("approval_required");
+            if (authorizationCurrent != null && !authorizationCurrent(operationId)) return Refused("approval_expired");
             // Approval callbacks may pump messages or change the binding.
             if (!ContextMatches()) return Refused("stale_context");
             if (!editor.HasVerifiedAtomicLiveBufferSemantics) return new SourceResult("unsupported", "atomic_live_buffer_unverified");
@@ -212,7 +266,10 @@ namespace TwinCatMcp.Engineering.Host
             try {
                 outcome = editor.CompareExchange(new SourceEditRequest { ContextIdentity = contextIdentity,
                     ObjectId = preview.ObjectId, Section = preview.Section,
-                    ExpectedText = preview.Before, ReplacementText = preview.After });
+                    ExpectedText = preview.Before, ReplacementText = preview.After,
+                    ExpectedBufferText = preview.BeforeBuffer, ReplacementBufferText = preview.AfterBuffer, ProjectRevision = preview.ProjectRevision,
+                    BufferIdentity = preview.BufferIdentity,
+                    AuthorizationCurrent = () => authorizationCurrent == null || authorizationCurrent(operationId) });
             }
             catch { outcome = SourceExchangeOutcome.Unknown; }
             var status = outcome == SourceExchangeOutcome.Applied ? "succeeded" :
@@ -220,8 +277,9 @@ namespace TwinCatMcp.Engineering.Host
                 outcome == SourceExchangeOutcome.Unsupported ? "unsupported" : "unknown";
             completed(status);
             return new SourceResult(status, status == "succeeded" ? null : "source_exchange_" + status,
-                new Dictionary<string, object> { { "journalOperationId", operationId },
-                    { "baselineDigest", Digest(preview.Before) }, { "proposedDigest", Digest(preview.After) },
+                new Dictionary<string, object> { { "journalOperationId", preview.JournalId ?? operationId },
+                    { "baselineDigest", Digest(preview.BeforeBuffer) }, { "proposedDigest", Digest(preview.AfterBuffer) },
+                    { "sectionBaselineDigest", Digest(preview.Before) }, { "sectionProposedDigest", Digest(preview.After) },
                     { "source", status == "succeeded" ? "liveBuffer" : "unknown" } });
         }
 
@@ -245,7 +303,8 @@ namespace TwinCatMcp.Engineering.Host
                 !snapshot.IsUnambiguousIdentity || !snapshot.IsOrdinaryPlcSource ||
                 !string.Equals(snapshot.ContextIdentity, contextIdentity, StringComparison.Ordinal) ||
                 !string.Equals(snapshot.ObjectId, objectId, StringComparison.Ordinal) ||
-                !string.Equals(snapshot.Section, section, StringComparison.Ordinal) || !ValidText(snapshot.Text))
+                !string.Equals(snapshot.Section, section, StringComparison.Ordinal) || !ValidText(snapshot.Text) ||
+                !ValidBuffer(snapshot.BufferText) || string.IsNullOrEmpty(snapshot.ProjectRevision) || snapshot.BufferIdentity == null || snapshot.BuildReplacement == null)
                 return Refused("source_identity_or_buffer_unverified");
             return null;
         }
@@ -281,6 +340,13 @@ namespace TwinCatMcp.Engineering.Host
             catch (EncoderFallbackException) { return false; }
         }
 
+        private static bool ValidBuffer(string text)
+        {
+            if (text == null || text.Length > 65536 || text.IndexOf('\0') >= 0) return false;
+            try { new UTF8Encoding(false, true).GetByteCount(text); return true; }
+            catch (EncoderFallbackException) { return false; }
+        }
+
         private static SourceResult Refused(string code) { return new SourceResult("refused", code); }
         private static string CanonicalId(string value)
         {
@@ -302,7 +368,8 @@ namespace TwinCatMcp.Engineering.Host
 
         private sealed class SourcePreview
         {
-            internal string ObjectId, Section, Before, After;
+            internal string ObjectId, Section, Before, After, BeforeBuffer, AfterBuffer, PreviewId, JournalId, ProjectRevision;
+            internal object BufferIdentity;
             internal bool Consumed;
         }
         private sealed class SourceJournal

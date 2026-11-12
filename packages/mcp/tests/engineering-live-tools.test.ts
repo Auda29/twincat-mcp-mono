@@ -14,6 +14,7 @@ const context: LiveEngineeringContext = {
   contextEpoch: "bound-1",
 };
 const targetOperationId = "c723bb55-c04b-437b-98f8-88d1737b9ad7";
+const selectedBuild = { configuration: "Debug", platform: "TwinCAT RT (x86)" };
 
 function setup(respond?: (request: Record<string, unknown>) => unknown) {
   const dispatch = vi.fn(async (text: string) => {
@@ -33,6 +34,22 @@ function setup(respond?: (request: Record<string, unknown>) => unknown) {
 }
 
 describe("explicit live engineering tools", () => {
+  it("routes source preview and mutation through the bound manual lane", async () => {
+    const { dispatch, tool } = setup((request) => ({ protocolVersion: 1, sessionId: request.sessionId, operationId: request.operationId,
+      status: "succeeded", provenance: { source: "liveBuffer", dirtyState: "dirty", buildOperationId: null }, result: { previewOperationId: request.operationId } }));
+    const objectId = "C:\\fixture\\Main.TcPOU|11111111-1111-1111-1111-111111111111|Main";
+    const preview = await tool("plc_source_preview").execute({ objectId, section: "implementation", proposedText: "a := 2;" }) as Record<string, unknown>;
+    expect(preview.status).toBe("succeeded");
+    expect(JSON.parse(dispatch.mock.calls[0]![0])).toMatchObject({ operation: "source.preview", arguments: { objectId, section: "implementation", proposedText: "a := 2;" } });
+    const args = { previewId: targetOperationId, baselineDigest: "a".repeat(64), proposedDigest: "b".repeat(64), projectRevision: "c".repeat(64) };
+    expect(await tool("plc_source_apply").execute(args)).toMatchObject({ status: "succeeded" });
+    const request = JSON.parse(dispatch.mock.calls[1]![0]);
+    expect(request).toMatchObject({ operation: "source.apply", arguments: args, expected: { projectFile: context.projectFile } });
+    expect(Date.parse(request.arguments.approvalExpiresUtc)).toBeGreaterThan(Date.now());
+    expect(tool("plc_source_apply").annotations?.destructiveHint).toBe(true);
+    await expect(tool("plc_source_apply").execute({ ...args, sessionId: context.sessionId })).rejects.toThrow();
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
   it("returns association evidence without treating it as a build result", async () => {
     const { dispatch, tool } = setup((request) => ({
       protocolVersion: 1, sessionId: request.sessionId, operationId: request.operationId,
@@ -49,18 +66,18 @@ describe("explicit live engineering tools", () => {
     expect(JSON.parse(dispatch.mock.calls[0]![0])).toMatchObject({ operation: "project.association", arguments: {} });
     expect(dispatch).toHaveBeenCalledTimes(1);
   });
-  it("does not substitute a TwinCAT project build for a PLC-only build", async () => {
+  it("requires an explicitly selected existing configuration", async () => {
     const { dispatch, tool } = setup();
-    expect(await tool("plc_build_project").execute({})).toMatchObject({ status: "unsupported" });
+    await expect(tool("plc_build_project").execute({})).rejects.toThrow();
     expect(dispatch).not.toHaveBeenCalled();
   });
-  it.each(["tc_build_project", "tc_build_and_get_errors"])("submits %s exactly once without polling", async (name) => {
+  it.each(["tc_build_project", "plc_build_project", "tc_build_and_get_errors"])("submits %s exactly once without polling", async (name) => {
     const { dispatch, tool } = setup();
-    const response = await tool(name).execute({}) as Record<string, unknown>;
+    const response = await tool(name).execute(selectedBuild) as Record<string, unknown>;
     expect(response.status).toBe("accepted");
     expect(dispatch).toHaveBeenCalledTimes(1);
     const request = JSON.parse(dispatch.mock.calls[0]![0]);
-    expect(request).toMatchObject({ protocolVersion: 1, sessionId: context.sessionId, operation: "build.start", arguments: {}, expected: { idePid: 1234, projectFile: context.projectFile } });
+    expect(request).toMatchObject({ protocolVersion: 1, sessionId: context.sessionId, operation: "build.start", arguments: selectedBuild, expected: { idePid: 1234, projectFile: context.projectFile } });
     expect(request.operationId).toBe(response.operationId);
     expect(Date.parse(request.arguments.approvalExpiresUtc)).toBeGreaterThan(Date.now());
     expect(request.operationId).toMatch(/^[0-9a-f-]{36}$/);
@@ -120,7 +137,7 @@ describe("explicit live engineering tools", () => {
 
   it("preserves explicit provider refusals", async () => {
     const { tool } = setup((request) => ({ protocolVersion: 1, sessionId: request.sessionId, operationId: request.operationId, status: "refused", provenance: { source: "unknown", buildOperationId: null }, error: "approval_denied" }));
-    expect(await tool("tc_build_project").execute({})).toMatchObject({ status: "refused", error: "approval_denied" });
+    expect(await tool("tc_build_project").execute(selectedBuild)).toMatchObject({ status: "refused", error: "approval_denied" });
   });
 
   it("does not return unowned evidence even for an unknown status", async () => {

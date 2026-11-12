@@ -57,6 +57,8 @@ internal static class SourcePolicyChecks
         Status(policy.Apply(unknownApply, uncertain), "unknown", "exception after write unknown");
         var writes = editor.Writes;
         Status(policy.Apply(unknownApply, uncertain), "unknown", "unknown retry cached");
+        var unknownJournal = policy.GetJournal(unknownApply);
+        Expect(unknownJournal.Status == "succeeded" && (string)unknownJournal.Result["outcome"] == "unknown", "unknown journal remains readable");
         Status(policy.Apply(Id(), uncertain), "refused", "unknown prevents preview replay");
         Status(policy.Rollback(Id(), unknownApply), "refused", "unknown journal cannot undo without resolution");
         Expect(editor.Writes == writes, "unknown never retried");
@@ -111,13 +113,14 @@ internal static class SourcePolicyChecks
         public SourceSnapshot Read(string contextIdentity, string objectId, string section)
         {
             return new SourceSnapshot { ContextIdentity = context(), ObjectId = objectId, Section = section,
-                Text = Text, IsExistingStructuredTextObject = Attested, IsOrdinaryPlcSource = Attested,
+                Text = Text, BufferText = Text, ProjectRevision = "project", BufferIdentity = this, BuildReplacement = text => text,
+                IsExistingStructuredTextObject = Attested, IsOrdinaryPlcSource = Attested,
                 IsUnambiguousIdentity = Attested, IsVerifiedLiveBuffer = Attested };
         }
         public SourceExchangeOutcome CompareExchange(SourceEditRequest request)
         {
             if (BeforeExchange != null) BeforeExchange();
-            if (request.ContextIdentity != context() || Text != request.ExpectedText || !Attested)
+            if (request.ContextIdentity != context() || Text != request.ExpectedText || Text != request.ExpectedBufferText || !Attested)
                 return SourceExchangeOutcome.Conflict;
             Text = request.ReplacementText;
             Writes++;

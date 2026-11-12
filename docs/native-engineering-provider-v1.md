@@ -1,20 +1,19 @@
 # Native engineering provider contract, version 1
 
-This is an integration contract, not a claim that a live provider is available.
+This contract has a bounded implementation; live IDE acceptance is separate.
 Assistant hosts the provider in the already bound IDE process and owns the local
 authenticated transport, session lifecycle, user interaction and packaging.
 Engineering owns the provider and engineering policy. No component discovers
 or attaches to an IDE through ROT on behalf of a request.
 
-Current limitation: Beckhoff documents `SolutionBuild.BuildProject` targeting
-the DTE TwinCAT `.tsproj`; the bound `.plcproj` is located through the TwinCAT
-tree rather than directly through DTE. The present build adapter searches DTE for
-the bound `.plcproj`, so it may refuse normal projects and has not been verified
-to build one. `build.start` is disabled pending a verified target and separately
-approved scope. A `.tsproj` build must not be represented as a PLC-only build.
-`plc_build_project` is unsupported until a separately scoped command is verified.
-The documented path distinction is described in [Beckhoff's project-path
-documentation](https://infosys.beckhoff.com/content/1033/tc3_automationinterface/21842608907.html).
+Beckhoff documents selective compilation using the full `.plcproj` path in
+`SolutionBuild.BuildProject`. The adapter resolves that PLC through its owning
+TwinCAT project, verifies the existing solution/PLC configuration and target
+platform, and submits the exact PLC path without switching settings. Microsoft
+documents dependency builds too, so this implementation refuses any nonempty or
+unverifiable dependency array. It never substitutes a `.tsproj` build.
+See [Beckhoff's compilation API](https://infosys.beckhoff.com/content/1033/tc3_automationinterface/21842451979.html)
+and [Microsoft's dependency scope](https://learn.microsoft.com/en-us/dotnet/api/envdte.solutionbuild.buildproject?view=visualstudiosdk-2017).
 
 ## Managed interface
 
@@ -22,6 +21,9 @@ The intended assembly is `TwinCatMcp.Engineering.Host.dll`, targeting .NET
 Framework 4.7.2, with no distributed vendor interop assemblies. The host pins
 the assembly version and SHA-256 in its own packaging manifest. Until verified,
 only TwinCAT 4024 x86 is eligible; x64 and other versions must fail closed.
+The injecting host must enforce the agreed exact TcXaeShell/Shell15 x86
+15.0.0.0 and TwinCAT 3.1.4024.78 identity before creating the provider. The
+factory trusts that native gate; interface presence is not version eligibility.
 
 Namespace `TwinCatMcp.Engineering.Host` exposes:
 
@@ -36,6 +38,13 @@ public static class EngineeringProviderFactory {
         Func<HostContext> currentContext,
         Func<ApprovalRequest, bool> consumeApproval,
         SynchronizationContext ideContext);
+    public static IEngineeringProvider CreateWithEditorAccess(
+        object injectedDte,
+        Func<string, bool?> authoritativeDirty,
+        Func<HostContext> currentContext,
+        Func<ApprovalRequest, bool> consumeApproval,
+        SynchronizationContext ideContext,
+        Func<string, object> getTextBuffer);
 }
 ```
 
@@ -105,12 +114,18 @@ not consume that budget. Timeout or cancellation of a submitted mutation has an
 `unknown` outcome until independently resolved; never automatically retry it.
 Cancellation is best effort and does not assert that an IDE operation stopped.
 
-`build.start` requires exactly one argument, `approvalExpiresUtc`, an ISO 8601
+`build.start` requires exactly `approvalExpiresUtc`, `configuration` and
+`platform`. `approvalExpiresUtc` is an ISO 8601
 UTC timestamp ending in `Z`, strictly in the future and no more than two minutes
 away. The provider passes that exact instant to `ApprovalRequest.ExpiresUtc`;
 the request digest includes the supplied timestamp. Parsed diagnostics include
 `navigationAvailable: false` because no exact project-item and source-baseline
 attestation has yet been established. A diagnostic path is not navigation proof.
+`session.describe` performs read-only preflight. Only a successful preflight
+reports `capabilities.plcBuild: "supported"` with `result.configuration`,
+`result.platform`, `buildScope: "plcProject"` and `targetProjectFile` equal to
+the bound PLC project. The submitted strings must match before and after native
+approval. A supported preflight is not evidence that a real build completed.
 
 `project.association` takes empty `arguments` and observes the injected DTE
 solution. It reports `solutionFile`, `plcProjectFile`, `twinCatProjectFile`
@@ -144,6 +159,53 @@ ambiguous identity or unsupported editor semantics must refuse mutation.
 Create, delete, multiple files, hardware and Safety changes are out of scope.
 No operation implicitly saves, switches configuration/platform, activates,
 downloads, logs in, runs, stops or forces values.
+
+### Supported live XML editor scope
+
+`Create` exposes no editor access. `CreateWithEditorAccess` receives a trusted
+host callback for an exact canonical, already-open RDT moniker. The host must
+verify its bound IDE, cookie, document data and MEF document-buffer identity,
+returning the actual `ITextBuffer` or null. It must not open a document. Fresh
+read-only reacquisition during transient own-edit suspension may return the same
+validated buffer; new native approval must still be refused while suspended.
+
+The implemented source adapter supports a raw `.TcPOU` XML document buffer.
+It verifies the source file's direct, unconditional, static `Compile Include`
+in a known-clean `.plcproj`, holding a read-only file lease while checking its
+bytes. It maps a unique existing POU or direct Method/Action GUID and exact
+qualified name to one CDATA declaration or ST implementation. It refuses
+properties, projection buffers, custom ST-only editor buffers, namespaces,
+unsupported XML metadata and dynamic project membership. Sections are limited
+to 16,384 UTF-16 code units and the full buffer to 65,536 code units.
+
+The source object ID is `<canonical .TcPOU path>|<lowercase GUID-D>|<qualifiedName>`.
+The provider operations are:
+
+- `source.targets`: `{moniker}` discovers supported existing IDs in the live XML.
+- `source.read`: `{objectId,section}` reads the exact current section.
+- `source.preview`: `{objectId,section,proposedText}` returns `previewOperationId`,
+  `beforeText`, `proposedText`, `projectRevision`, whole-buffer `baselineDigest`
+  and `proposedDigest`, and separate section digest fields.
+- `source.apply`: `{previewId,approvalExpiresUtc,baselineDigest,proposedDigest,projectRevision}`.
+- `source.rollback`: the same approval fields with `journalId` instead of
+  `previewId`, using the reverse whole-buffer digests.
+- `source.journal`: `{journalId}` reads the original apply journal, including
+  unknown and rollback outcomes.
+
+Apply and rollback compare the exact whole XML buffer, buffer object identity,
+project revision, context and approval immediately before an `ITextEdit`
+transaction. Only the mapped CDATA span changes. There is no disk source write
+or save. The transaction's returned snapshot and current buffer must match the
+exact post-image; identity loss or uncertainty after submission yields `unknown`.
+Legacy `IVsTextLines.LockBuffer` is not used as an atomicity guarantee.
+
+The journal keeps pre/post images in provider memory before submission. It is
+not evicted to admit another source mutation, and unknown mutations are never
+automatically retried. It survives transient suspension while the provider and
+session remain retained, but does not survive provider disposal or a process
+restart. A journal does not authorize rollback; rollback needs a new native
+approval and exact current post-image. Specialized TwinCAT editor compatibility
+and live IDE acceptance remain unverified.
 
 ## Authenticated pipe framing
 

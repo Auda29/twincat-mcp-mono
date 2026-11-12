@@ -41,7 +41,21 @@ namespace TwinCatMcp.Engineering.Host
         }
 
         // The dispatcher consumes native approval immediately before this call.
-        internal BuildSnapshot Start(Guid operationId, string solutionFile, string projectFile, Action revalidateContext, Action consumeApproval = null)
+        internal BuildTarget Assess(string solutionFile, string projectFile, Action revalidateContext)
+        {
+            ThrowDisposed();
+            if (active != null) throw new NativeBuildException("refused", "build_already_running");
+            revalidateContext();
+            var target = ide.Prepare(solutionFile, projectFile, dirty);
+            revalidateContext();
+            if (!ide.IsCurrent(target, solutionFile, projectFile) || ide.IsBuilding) throw new NativeBuildException("conflict", "build_context_changed");
+            try { target.OutputCaptureAvailable = ide.ReadOutput() != null; } catch { target.OutputCaptureAvailable = false; }
+            revalidateContext();
+            return target;
+        }
+
+        internal BuildSnapshot Start(Guid operationId, string solutionFile, string projectFile, Action revalidateContext, Action consumeApproval = null,
+            string expectedConfiguration = null, string expectedPlatform = null, Action validateAuthorization = null)
         {
             ThrowDisposed();
             if (operationId == Guid.Empty || revalidateContext == null) throw new NativeBuildException("refused", "invalid_build_request");
@@ -50,6 +64,8 @@ namespace TwinCatMcp.Engineering.Host
             if (active != null) throw new NativeBuildException("refused", "build_already_running");
             revalidateContext();
             var target = ide.Prepare(solutionFile, projectFile, dirty);
+            if ((expectedConfiguration != null && target.Configuration != expectedConfiguration) ||
+                (expectedPlatform != null && target.Platform != expectedPlatform)) throw new NativeBuildException("conflict", "build_configuration_changed");
             revalidateContext();
             if (!ide.IsCurrent(target, solutionFile, projectFile) || ide.IsBuilding) throw new NativeBuildException("conflict", "build_context_changed");
             if (consumeApproval != null) consumeApproval();
@@ -58,6 +74,9 @@ namespace TwinCatMcp.Engineering.Host
             // configuration and project-policy gates after it returns.
             var checkedTarget = ide.Prepare(solutionFile, projectFile, dirty);
             if (!string.Equals(target.UniqueName, checkedTarget.UniqueName, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(target.ProjectFile, checkedTarget.ProjectFile, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(target.OwningProjectFile, checkedTarget.OwningProjectFile, StringComparison.OrdinalIgnoreCase) ||
+                target.MappingDigest != checkedTarget.MappingDigest ||
                 target.Configuration != checkedTarget.Configuration || target.Platform != checkedTarget.Platform ||
                 !ide.IsCurrent(target, solutionFile, projectFile) || ide.IsBuilding) throw new NativeBuildException("conflict", "build_context_changed");
             revalidateContext();
@@ -67,9 +86,10 @@ namespace TwinCatMcp.Engineering.Host
             };
             runs.Add(operationId, run);
             active = run;
+            try { revalidateContext(); if (validateAuthorization != null) validateAuthorization(); }
+            catch { run.Status = "refused"; active = null; return Snapshot(run); }
             try
             {
-                revalidateContext();
                 ide.Start(target);
             }
             catch
@@ -136,7 +156,9 @@ namespace TwinCatMcp.Engineering.Host
 
         private bool Matches(Run run, string name, string configuration, string platform)
         {
-            return string.Equals(name, run.Target.UniqueName, StringComparison.OrdinalIgnoreCase) && configuration == run.Target.Configuration && platform == run.Target.Platform;
+            return (string.Equals(name, run.Target.UniqueName, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(run.Target.ProjectFile) && string.Equals(name, run.Target.ProjectFile, StringComparison.OrdinalIgnoreCase))) &&
+                configuration == run.Target.Configuration && platform == run.Target.Platform;
         }
 
         private void OnBuildBegin(bool projectBuild)
