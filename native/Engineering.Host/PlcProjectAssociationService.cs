@@ -235,6 +235,18 @@ namespace TwinCatMcp.Engineering.Host
 
     internal sealed class ReflectedPlcProjectAssociationAccess : IPlcProjectAssociationAccess
     {
+        // Fixed diagnostic identifiers only: never echo arbitrary type names,
+        // assembly paths or loader exception messages into provider responses.
+        private static readonly Dictionary<string, string> interfaceDiagnostics = new Dictionary<string, string>(StringComparer.Ordinal) {
+            { "EnvDTE.DTE", "envdte_dte" },
+            { "EnvDTE.Solution", "envdte_solution" },
+            { "EnvDTE.Projects", "envdte_projects" },
+            { "EnvDTE.Project", "envdte_project" },
+            { "EnvDTE.ProjectItems", "envdte_projectitems" },
+            { "EnvDTE.ProjectItem", "envdte_projectitem" },
+            { "TCatSysManagerLib.ITcSysManager", "tcatsysmanagerlib_itcsysmanager" },
+            { "TCatSysManagerLib.ITcSmTreeItem", "tcatsysmanagerlib_itcsmtreeitem" }
+        };
         public object Dte { get; private set; }
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
         internal ReflectedPlcProjectAssociationAccess(object dte) { if (dte == null) throw new ArgumentNullException("dte"); Dte = dte; }
@@ -242,12 +254,23 @@ namespace TwinCatMcp.Engineering.Host
         {
             Type type;
             if (types.TryGetValue(name, out type)) return type;
-            var matches = AppDomain.CurrentDomain.GetAssemblies().Where(a => {
-                var assembly = a.GetName().Name;
-                return string.Equals(assembly, "EnvDTE", StringComparison.OrdinalIgnoreCase) || assembly == "Microsoft.VisualStudio.Interop" || assembly == "TCatSysManagerLib" || assembly == "Interop.TCatSysManagerLib";
-            }).Select(a => a.GetType(name, false)).Where(t => t != null).Distinct().ToArray();
-            if (matches.Length != 1) throw new PlcProjectAssociationException("unsupported", "association_interop_unavailable");
+            Type[] matches;
+            try {
+                matches = AppDomain.CurrentDomain.GetAssemblies().Where(a => {
+                    var assembly = a.GetName().Name;
+                    return string.Equals(assembly, "EnvDTE", StringComparison.OrdinalIgnoreCase) || assembly == "Microsoft.VisualStudio.Interop" || assembly == "TCatSysManagerLib" || assembly == "Interop.TCatSysManagerLib";
+                }).Select(a => a.GetType(name, false)).Where(t => t != null).Distinct().ToArray();
+            }
+            catch { throw InteropFailure("inspection_failed", name); }
+            if (matches.Length == 0) throw InteropFailure("missing", name);
+            if (matches.Length != 1) throw InteropFailure("ambiguous", name);
             types.Add(name, matches[0]); return matches[0];
+        }
+        private static PlcProjectAssociationException InteropFailure(string reason, string name)
+        {
+            string identifier;
+            if (name == null || !interfaceDiagnostics.TryGetValue(name, out identifier)) identifier = "unknown_interface";
+            return new PlcProjectAssociationException("unsupported", "association_interop_" + reason + "_" + identifier);
         }
         public bool Supports(object target, string name) { return target != null && Resolve(name).IsInstanceOfType(target); }
         private static Type Declaring(Type type, string member)

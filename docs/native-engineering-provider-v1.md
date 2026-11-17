@@ -89,6 +89,40 @@ string projectFile, string contextEpoch)`.
 clean. The host supplies the IDE UI synchronization context. Provider dispatch
 must not block the UI waiting for build completion.
 
+### Unreleased loaded-interop diagnostics
+
+The published 0.5.3 helper returns `association_interop_unavailable` for both
+zero and multiple distinct loaded type matches. This diagnostic update separates
+those cases without changing the assembly allowlist, interface matching, public
+factory signatures or protocol. It does not load an interop assembly or attach
+to an IDE. The new codes are not retroactively part of the published release.
+
+All remain `unsupported`, with a fixed interface identifier appended:
+
+- `association_interop_missing_<interface>`: no matching type was found in the
+  already-loaded, allowlisted assemblies. An installed PIA file does not prove
+  that it is loaded in the provider's AppDomain.
+- `association_interop_ambiguous_<interface>`: more than one distinct reflected
+  type matched. The resolver does not select the first candidate. Repeated
+  references to the same type remain deduplicated.
+- `association_interop_inspection_failed_<interface>`: loaded-assembly/type
+  inspection threw. Raw loader exception text and file paths are not exposed.
+
+Identifiers are fixed: `envdte_dte`, `envdte_solution`, `envdte_projects`,
+`envdte_project`, `envdte_projectitems`, `envdte_projectitem`,
+`tcatsysmanagerlib_itcsysmanager` and `tcatsysmanagerlib_itcsmtreeitem`.
+Unknown names use `unknown_interface`, not caller-supplied text. The diagnostic
+reaches `session.describe.result.buildUnavailableReason` and the association
+operation's `error` without adding response fields.
+
+The Beta 5 report establishes an association failure, not which of these cases
+occurred. Offline fixtures demonstrate the distinction; they do not reproduce
+the user's loaded IDE process. Host readiness must establish its trusted interop
+types in the same AppDomain and report ambiguity instead of loading arbitrary
+paths or choosing a global candidate. Strong-name authentication and later
+EnvDTE80 navigation readiness are separate host concerns; this resolver still
+uses its existing loaded-assembly simple-name allowlist.
+
 The host creates and keeps the random capability secret out of JSON and model
 context, authenticates IPC before dispatch, and never accepts a model-selected
 session or project. `consumeApproval` is host-owned, single-use and atomic;
