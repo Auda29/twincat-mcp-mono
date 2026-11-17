@@ -7,7 +7,12 @@ The core package owns the ADS domain logic used by both `pi-twincat-ads` and
 symbol/data-type caching, watches, reconnect handling, and the write-safety
 model.
 
-The published [Engineering 0.5.3 GitHub release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
+[Engineering 0.5.4](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.4)
+adds association interop diagnostics only. Its own receipt pins the new source
+commit and assets; it is not a functional interop-loading fix or an npm
+publication. The nine-tool/source-disabled integration boundary is unchanged.
+
+The prior [Engineering 0.5.3 GitHub release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
 pins commit `99de69b8cedec780a68a89a631132ea6eb76cf0b`; it did not publish
 new npm versions. [Release Flow](../../docs/release-flow.md) describes the
 runtime/source archives, receipt verification and residual dependency advisories.

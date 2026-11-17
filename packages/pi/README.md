@@ -9,7 +9,12 @@ This package is the Pi adapter for the monorepo. ADS logic is provided by
 `twincat-mcp-core`; this package owns Pi extension registration, tool wrappers,
 lifecycle hooks, context injection, and the bundled skill.
 
-[Engineering 0.5.3](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
+[Engineering 0.5.4](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.4)
+is the diagnostics-only update. Use its own receipt/source pin rather than
+reusing the historical 0.5.3 asset hashes. It keeps the integration's nine-tool,
+source-disabled boundary and does not publish a new npm version or fix loading.
+
+The prior [Engineering 0.5.3 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
 is a GitHub artifact release at commit
 `99de69b8cedec780a68a89a631132ea6eb76cf0b`, not a new npm publication.
 Its Pi tarball is separate from the assembled Core/MCP runtime; Pi's agent
