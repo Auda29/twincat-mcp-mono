@@ -1,6 +1,30 @@
 # Release Flow
 
-## Engineering integration release 0.5.3
+## Engineering 0.5.4 diagnostics release
+
+The `engineering-v0.5.4` GitHub channel uses the same clean-source build,
+five primary assets, separate nine-tool catalog and schema 1 receipt as 0.5.3.
+Read the new receipt for its exact `sourceCommit`, asset/module hashes and
+`sourceTreeSha256`; the 0.5.3 pins below are historical and must not be reused.
+The assembled runtime still requires external Node.js 20 or newer and contains
+Core/MCP dependencies and our own x86 helper, not Pi's agent runtime or vendor
+interop binaries. This tag does not invoke the `core-v*` npm publication chain.
+
+This is a diagnostics-only change. Association failures now identify one of
+eight fixed interface names and distinguish missing, ambiguous and failed
+inspection of already-loaded types. Matching, fail-closed behavior and host
+binding are unchanged. No vendor loading or functional interop remediation is
+claimed; the actual Beta 5 missing-versus-duplicate cause remains unconfirmed.
+
+The release keeps exactly nine default tools, `sourceFeatures:"disabled"` and
+factory7 `CreateWithHostAccess` with a null editor accessor. All source-editor
+development code remains retained but inactive in the release configuration.
+No new feature or dependency upgrade is included. Protocol 1, receipt schema 1
+and native managed ABI 1.0.0.0 remain unchanged. The prior residual dependency
+and real-host acceptance limitations still apply; release notes describe the
+audit of the newly assembled artifact without claiming a clean audit.
+
+## Historical Engineering integration release 0.5.3
 
 The `engineering-v0.5.3` GitHub release distributes an assembled runtime,
 package tarballs, provider source archive and an integrity receipt. This tag

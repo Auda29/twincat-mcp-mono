@@ -12,7 +12,21 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Current release: Engineering 0.5.3
+## Engineering 0.5.4 diagnostics update
+
+[Engineering 0.5.4](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.4)
+changes association interop failure diagnostics only: fixed per-interface codes
+distinguish missing, ambiguous and failed loaded-type inspection. The resolver
+still fails closed and does not load vendor assemblies or choose an arbitrary
+candidate. The reported Beta 5 interop incident's actual cause remains
+unconfirmed; this release does not claim a functional loading fix.
+
+The nine-tool/source-disabled boundary below is unchanged. Protocol 1, native
+assembly version 1.0.0.0 and receipt schema 1 remain compatible. Use the 0.5.4
+release's own receipt and source commit; do not reuse the older asset hashes.
+See [Release Flow](docs/release-flow.md) for the release process and limitations.
+
+## Base integration release: Engineering 0.5.3
 
 [Engineering 0.5.3](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
 is a GitHub artifact release pinned to

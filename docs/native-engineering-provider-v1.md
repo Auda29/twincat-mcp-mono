@@ -89,13 +89,15 @@ string projectFile, string contextEpoch)`.
 clean. The host supplies the IDE UI synchronization context. Provider dispatch
 must not block the UI waiting for build completion.
 
-### Unreleased loaded-interop diagnostics
+### Engineering 0.5.4 loaded-interop diagnostics
 
 The published 0.5.3 helper returns `association_interop_unavailable` for both
 zero and multiple distinct loaded type matches. This diagnostic update separates
 those cases without changing the assembly allowlist, interface matching, public
 factory signatures or protocol. It does not load an interop assembly or attach
-to an IDE. The new codes are not retroactively part of the published release.
+to an IDE. The new codes are not retroactively part of the published 0.5.3
+release. Version 0.5.4 preserves its nine-tool, null-editor-accessor release
+boundary and does not claim a functional fix for the unconfirmed incident.
 
 All remain `unsupported`, with a fixed interface identifier appended:
 

@@ -6,7 +6,13 @@ This package exposes `twincat-mcp-core` runtime operations as Model Context
 Protocol tools. MCP-specific protocol handling lives here; ADS domain behavior,
 configuration validation, watches, and write gates live in `twincat-mcp-core`.
 
-Engineering 0.5.3 is published as
+[Engineering 0.5.4](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.4)
+adds per-interface association interop diagnostics. Use its own integrity
+receipt and source commit for adoption, not the prior hashes below. Default nine
+tools, inactive source features and the unconfirmed incident cause are unchanged.
+There is no new npm publication or functional interop-loading fix.
+
+The prior Engineering 0.5.3 release is published as
 [GitHub release assets](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.3)
 at commit `99de69b8cedec780a68a89a631132ea6eb76cf0b`, not as a new npm
 publication. See [asset verification and release limits](../../docs/release-flow.md).
