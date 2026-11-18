@@ -100,6 +100,18 @@ namespace TwinCatMcp.Engineering.Host
                 throw new ArgumentNullException();
             return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext, getTextBuffer, navigateExactErrorItem, getSectionEditor);
         }
+        // Host-only opt-in. Null editor callbacks retain the dormant source lane.
+        // The authoritative Type callback is captured once, never model-selected.
+        public static IEngineeringProvider CreateWithInteropTypes(object injectedDte, Func<string, bool?> authoritativeDirty,
+            Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval, SynchronizationContext ideContext,
+            Func<string, object> getTextBuffer, Func<string, bool> navigateExactErrorItem,
+            Func<string, string, object> getSectionEditor, Func<string, Type> getInteropType)
+        {
+            if (injectedDte == null || authoritativeDirty == null || currentContext == null || consumeApproval == null ||
+                ideContext == null || navigateExactErrorItem == null || getInteropType == null) throw new ArgumentNullException();
+            return new EngineeringProvider(injectedDte, authoritativeDirty, currentContext, consumeApproval, ideContext,
+                getTextBuffer, navigateExactErrorItem, getSectionEditor, new EngineeringInteropTypes(getInteropType));
+        }
     }
 
     internal sealed class EngineeringProvider : IEngineeringProvider
@@ -112,6 +124,7 @@ namespace TwinCatMcp.Engineering.Host
         private readonly Func<string, object> getTextBuffer;
         private readonly Func<string, bool> navigateExactErrorItem;
         private readonly Func<string, string, object> getSectionEditor;
+        private readonly EngineeringInteropTypes interopTypes;
         private SourcePolicy sources;
         private XmlStSourceEditor sourceEditor;
         private CustomStReader customStReader;
@@ -122,9 +135,10 @@ namespace TwinCatMcp.Engineering.Host
         private bool disposed;
         internal EngineeringProvider(object dte, Func<string, bool?> dirty, Func<HostContext> currentContext,
             Func<ApprovalRequest, bool> approval, SynchronizationContext ideContext, Func<string, object> getTextBuffer = null,
-            Func<string, bool> navigateExactErrorItem = null, Func<string, string, object> getSectionEditor = null)
+            Func<string, bool> navigateExactErrorItem = null, Func<string, string, object> getSectionEditor = null, EngineeringInteropTypes interopTypes = null)
         { this.dte = dte; this.dirty = dirty; this.currentContext = currentContext; this.approval = approval; this.ideContext = ideContext; this.getTextBuffer = getTextBuffer;
-          this.navigateExactErrorItem = navigateExactErrorItem; this.getSectionEditor = getSectionEditor; }
+          this.navigateExactErrorItem = navigateExactErrorItem; this.getSectionEditor = getSectionEditor;
+          this.interopTypes = interopTypes ?? new EngineeringInteropTypes(); }
 
         private sealed class SourceCall
         {
@@ -325,7 +339,7 @@ namespace TwinCatMcp.Engineering.Host
                 if (name == "project.association")
                 {
                     if (args == null || args.Count != 0) throw new PlcProjectAssociationException("refused", "invalid_association_arguments");
-                    var association = new PlcProjectAssociationService(dte).Resolve(current.SolutionFile, current.ProjectFile,
+                    var association = new PlcProjectAssociationService(dte, interopTypes).Resolve(current.SolutionFile, current.ProjectFile,
                         () => ValidateContext(expected, currentContext(), session));
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"),
                         status = association.Status, provenance = Provenance(null), error = association.ErrorCode,
@@ -397,7 +411,7 @@ namespace TwinCatMcp.Engineering.Host
 
         private NativeBuildService BuildService()
         {
-            if (builds == null) builds = new NativeBuildService(dte, dirty);
+            if (builds == null) builds = new NativeBuildService(dte, dirty, interopTypes);
             return builds;
         }
 

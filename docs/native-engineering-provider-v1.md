@@ -74,6 +74,14 @@ public static class EngineeringProviderFactory {
         SynchronizationContext ideContext, Func<string, object> getTextBuffer,
         Func<string, bool> navigateExactErrorItem,
         Func<string, string, object> getSectionEditor);
+    // Unreleased host-authoritative binding opt-in; no fallback to an older factory.
+    public static IEngineeringProvider CreateWithInteropTypes(
+        object injectedDte, Func<string, bool?> authoritativeDirty,
+        Func<HostContext> currentContext, Func<ApprovalRequest, bool> consumeApproval,
+        SynchronizationContext ideContext, Func<string, object> getTextBuffer,
+        Func<string, bool> navigateExactErrorItem,
+        Func<string, string, object> getSectionEditor,
+        Func<string, Type> getInteropType);
 }
 ```
 
@@ -124,6 +132,79 @@ types in the same AppDomain and report ambiguity instead of loading arbitrary
 paths or choosing a global candidate. Strong-name authentication and later
 EnvDTE80 navigation readiness are separate host concerns; this resolver still
 uses its existing loaded-assembly simple-name allowlist.
+
+### Unreleased host-authoritative interop binding
+
+The November 18 Beta 6 report identifies
+`association_interop_ambiguous_tcatsysmanagerlib_itcsysmanager`. That establishes
+multiple distinct reflected matches, not their assembly identities or COM
+equivalence. The historical November 12 missing-versus-duplicate uncertainty
+must not be used to reinterpret this newer reason code.
+
+`CreateWithInteropTypes` is an additive, explicitly selected nine-parameter
+factory. Its first eight parameters match `CreateWithEditorViews`; the ninth
+is the host-only `Func<string,Type> getInteropType`. It is not present in the
+published 0.5.4 artifact. Existing factories remain available, and selecting
+the new path must not silently fall back to a released factory if absent.
+For the dormant release source lane, both editor callbacks remain null; the
+navigation callback and other existing host callbacks remain required.
+
+The provider invokes `getInteropType` exactly once for each of these fixed keys
+at creation, retaining successes, nulls and failures for its lifetime:
+
+- `EnvDTE.DTE`, `EnvDTE.Events`, `EnvDTE._dispBuildEvents_Event`,
+  `EnvDTE.Solution`, `EnvDTE.Projects`, `EnvDTE.Project`,
+  `EnvDTE.ProjectItems`, `EnvDTE.ProjectItem`, `EnvDTE.Documents`,
+  `EnvDTE.Document`, `EnvDTE.SolutionBuild`, `EnvDTE.SolutionConfiguration`,
+  `EnvDTE.SolutionContexts`, `EnvDTE.SolutionContext`,
+  `EnvDTE.BuildDependencies`, `EnvDTE.BuildDependency`, `EnvDTE.Windows`,
+  `EnvDTE.Window`, `EnvDTE.OutputWindow`, `EnvDTE.OutputWindowPanes`,
+  `EnvDTE.OutputWindowPane`, `EnvDTE.TextDocument`, `EnvDTE.TextPoint`,
+  `EnvDTE.EditPoint`.
+- `EnvDTE80.SolutionConfiguration2`.
+- `TCatSysManagerLib.ITcSysManager`, `TCatSysManagerLib.ITcSmTreeItem`,
+  `TCatSysManagerLib.ITcSysManager7`, `TCatSysManagerLib.ITcConfigManager`.
+
+An accepted value is an actual nongeneric public interface Type with the exact
+ordinal FullName, from an assembly already execution-loaded before callback
+capture. Wrappers, dynamic and reflection-only types are rejected. One exact
+Assembly instance must own the supplied EnvDTE family, and one must own all
+supplied TwinCAT interfaces. The EnvDTE80 platform interface must inherit the
+exact selected EnvDTE SolutionConfiguration type. `IsImport` is not required
+universally because the event interface is managed event plumbing. Missing
+optional output/platform types fail their dependent use, not unrelated
+association queries. There is no retry or global-discovery fallback in this
+authoritative mode. Callback mutation and later assembly arrivals do not change
+the frozen choices. Changing that map requires a new provider/session, not a
+callback retry or resubmission of an uncertain operation. Fixed `invalid`, `family_mismatch` and
+`inheritance_mismatch` diagnostics join the existing bounded failure reasons.
+
+The same binding instance is used by provider association, build preflight,
+its nested association/current-context checks, TwinCAT platform access,
+EnvDTE80 configuration access, event subscription and build submission.
+Unsubscription retains the exact selected event and delegate. Legacy discovery
+remains unique-only and no longer selects the first EnvDTE build assembly;
+conflicting family views refuse rather than mixing adapters.
+
+The host, not the model or JSON request, authenticates the provenance of its
+compiled references. Before candidate adoption it needs actual runtime Type
+assembly identities and MVIDs, not only installed-file/ReflectionOnly evidence.
+For the conflicting candidates, a separately authorized metadata report should
+capture assembly-qualified names, module MVID, public-key token/version,
+interface/import/type-equivalence attributes and pairwise `IsEquivalentTo`.
+The existing status-only diagnostic report does not already supply these facts.
+The helper does not authenticate a PIA merely from its simple name and never
+loads an arbitrary vendor path. EnvDTE80 readiness remains unsupported until
+the host establishes a trusted reference.
+
+No automatic equivalence merge is performed. Microsoft's
+[Type.IsEquivalentTo contract](https://learn.microsoft.com/en-us/dotnet/api/system.type.isequivalentto?view=netframework-4.8.1)
+permits different embedded member views. The offline fixture demonstrates two
+compiled synthetic COM interfaces that are CLR-equivalent despite different
+method sets. Equality of name/GUID alone also does not establish a safe reflected
+contract. This candidate is guarded by explicit host authority and target checks;
+it is not evidence that the user's actual conflicting pair is equivalent or
+that live build/navigation acceptance has passed.
 
 The host creates and keeps the random capability secret out of JSON and model
 context, authenticates IPC before dispatch, and never accepts a model-selected
