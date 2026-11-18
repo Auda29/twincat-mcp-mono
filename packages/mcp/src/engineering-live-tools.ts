@@ -3,6 +3,7 @@ import { win32 } from "node:path";
 import { z } from "zod";
 
 import type { McpToolDefinition } from "./index.js";
+import { createDebugLiveTools } from "./debug-live-tools.js";
 
 const uuid = z.string().uuid().refine((value) => value !== "00000000-0000-0000-0000-000000000000").transform((value) => value.toLowerCase());
 const canonicalPath = z.string().refine((value) =>
@@ -51,8 +52,9 @@ const responseSchema = z.object({
 /** Explicit live mode. The default file backend and its tools remain unchanged. */
 export function createLiveEngineeringToolDefinitions(
   binding: LiveEngineeringToolBinding,
-  options: { readonly enableDevelopmentSourceTools?: boolean } = {},
+  options: { readonly enableDevelopmentSourceTools?: boolean; readonly enableDebugTools?: boolean } = {},
 ): McpToolDefinition[] {
+  if (options.enableDevelopmentSourceTools && options.enableDebugTools) throw new Error("Conflicting host profile");
   const context = Object.freeze(contextSchema.parse(binding.context));
   const dispatch = binding.dispatch;
   if (typeof dispatch !== "function") throw new Error("An authenticated host dispatch function is required.");
@@ -76,7 +78,8 @@ export function createLiveEngineeringToolDefinitions(
       if ((resultBuildId != null && resultBuildId !== target) ||
           (provenanceBuildId != null && provenanceBuildId !== target)) throw new Error("Build ownership mismatch");
       const hasEvidence = response.output != null || (response.diagnostics?.length ?? 0) > 0;
-      const discovery = operation === "session.describe" || operation === "project.association" || operation.startsWith("source.");
+      const discovery = operation === "session.describe" || operation === "project.association"
+        || operation === "debug.context" || operation.startsWith("source.");
       if (discovery && hasEvidence) throw new Error("Unexpected build evidence");
       if (!discovery && (hasEvidence || ["accepted", "running", "succeeded", "failed", "cancelled"].includes(response.status)) &&
           provenanceBuildId !== target) throw new Error("Missing build ownership");
@@ -146,5 +149,7 @@ export function createLiveEngineeringToolDefinitions(
   // Build-mode callers retain the nine-tool catalog. The authenticated Editor
   // child can publish source definitions. The host still authorizes operations
   // and validates the source adapter and native approval before a mutation.
-  return options.enableDevelopmentSourceTools === true ? tools : tools.filter((tool) => !tool.name.startsWith("plc_source_"));
+  const buildTools = tools.filter((tool) => !tool.name.startsWith("plc_source_"));
+  if (options.enableDebugTools) return [...buildTools, ...createDebugLiveTools(invoke)];
+  return options.enableDevelopmentSourceTools === true ? tools : buildTools;
 }
