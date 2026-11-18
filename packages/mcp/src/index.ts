@@ -1589,7 +1589,11 @@ export async function main(): Promise<void> {
     return;
   }
 
-  const useHost = process.argv.slice(2).includes("--host-bootstrap-stdin");
+  const argv = process.argv.slice(2);
+  const buildHost = argv.includes("--host-bootstrap-stdin");
+  const editorHost = argv.includes("--host-editor-bootstrap-stdin");
+  const useHost = buildHost || editorHost;
+  if (useHost && argv.length !== 1) throw new Error("Invalid Engineering host mode");
   let binding: Awaited<ReturnType<typeof bootstrapEngineeringHost>> | undefined;
   if (useHost) {
     try { binding = await bootstrapEngineeringHost(process.stdin); }
@@ -1598,7 +1602,7 @@ export async function main(): Promise<void> {
   const liveTools = binding === undefined ? [] : createLiveEngineeringToolDefinitions({
     context: { sessionId: binding.sessionId, ...binding.expected },
     dispatch: (request) => binding!.client.dispatch(request),
-  });
+  }, { enableDevelopmentSourceTools: editorHost });
   // The dedicated child is engineering-only; it must not require or expose an
   // unrelated ADS connection. The ordinary MCP path is unchanged.
   const server = binding === undefined
