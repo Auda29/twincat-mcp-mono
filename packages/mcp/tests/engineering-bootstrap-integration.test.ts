@@ -52,7 +52,8 @@ describe("engineering child host handshake", () => {
       binding.client.dispose();
 
       const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
-      for (const [arg, count] of [["--host-bootstrap-stdin", 9], ["--host-editor-bootstrap-stdin", 15]] as const) {
+      for (const [arg, count] of [["--host-bootstrap-stdin", 9], ["--host-editor-bootstrap-stdin", 15],
+        ["--host-debug-bootstrap-stdin", 11]] as const) {
         const child = spawn(process.execPath, [entry, arg], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
         const terminated = once(child, "exit");
         const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
@@ -73,6 +74,7 @@ describe("engineering child host handshake", () => {
           const names = (await next()).result.tools.map((tool: { name: string }) => tool.name);
           expect(new Set(names).size).toBe(count);
           expect(names.includes("plc_source_apply")).toBe(count === 15);
+          expect(names.includes("plc_debug_read")).toBe(count === 11);
           expect(names).not.toContain("plc_write");
           expect(names).not.toContain("plc_read");
         } finally {

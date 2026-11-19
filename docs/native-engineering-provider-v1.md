@@ -19,6 +19,25 @@ Source mutations still require an applicable XML-buffer preview, exact document
 and baseline checks, and the host's separate approval. The attached normal
 TwinCAT ST editor still supports read-only preview.
 
+The unpublished Debug child mode `--host-debug-bootstrap-stdin` exposes the
+nine build/session/diagnostic tools plus `plc_debug_state` and
+`plc_debug_read`. It omits all source mutation tools. A Debug tool makes the
+internal `debug.context` request on the authenticated host channel with empty
+arguments, using the same correlated session, operation and context envelope.
+Only the native host can issue a grant for the selected active project chat.
+A verified response has status `succeeded` and result
+`{ loggedIn: true, grantId, amsNetId, adsPort, symbols }`. The grant ID is a
+UUID and `symbols` contains at most 32 exact, user-approved symbol names.
+The host must recheck the log-in state and runtime identity for every request.
+An offline, stale, switched or unverified session must return a refusal.
+
+The child checks the grant before opening ADS, before each approved symbol
+read and again before returning the samples. Each read uses the local ADS
+router, disables writes and closes its connection. Responses return at most
+eight timestamped scalar samples and discard readings if the grant changes.
+The host-side runtime observation and consent flow must be implemented before
+this catalog can be adopted.
+
 The published tag `engineering-v0.5.3` pins commit
 `99de69b8cedec780a68a89a631132ea6eb76cf0b`; see
 [release assets and integrity verification](release-flow.md). Protocol 1 and

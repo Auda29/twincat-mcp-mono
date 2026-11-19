@@ -1592,7 +1592,8 @@ export async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const buildHost = argv.includes("--host-bootstrap-stdin");
   const editorHost = argv.includes("--host-editor-bootstrap-stdin");
-  const useHost = buildHost || editorHost;
+  const debugHost = argv.includes("--host-debug-bootstrap-stdin");
+  const useHost = buildHost || editorHost || debugHost;
   if (useHost && argv.length !== 1) throw new Error("Invalid Engineering host mode");
   let binding: Awaited<ReturnType<typeof bootstrapEngineeringHost>> | undefined;
   if (useHost) {
@@ -1602,9 +1603,9 @@ export async function main(): Promise<void> {
   const liveTools = binding === undefined ? [] : createLiveEngineeringToolDefinitions({
     context: { sessionId: binding.sessionId, ...binding.expected },
     dispatch: (request) => binding!.client.dispatch(request),
-  }, { enableDevelopmentSourceTools: editorHost });
-  // The dedicated child is engineering-only; it must not require or expose an
-  // unrelated ADS connection. The ordinary MCP path is unchanged.
+  }, { enableDevelopmentSourceTools: editorHost, enableDebugTools: debugHost });
+  // Debug opens a read-only ADS connection on demand, after the host confirms
+  // the target and grant. The other owned children never open an ADS connection.
   const server = binding === undefined
     ? createMcpServer(createRuntimeFromConfig(await loadConfigInput()))
     : createMcpServerFromTools(liveTools);
