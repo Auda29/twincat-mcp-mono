@@ -1,6 +1,35 @@
 # Release Flow
 
-## Engineering 0.5.4 diagnostics release
+## Engineering 0.5.5 release preparation
+
+Build from a clean, committed checkout with `scripts/Build-EngineeringRelease.ps1`.
+The builder uses the locked Node.js dependencies and compiles the x86 .NET
+Framework 4.7.2 helper. It reflects the exact factory signature in the helper
+and runs the three assembled child modes against a synthetic Windows named pipe.
+Each mode must return the exact tool schemas in its catalog before the builder
+writes the receipt.
+
+| Owned child flag | Catalog asset | Tools |
+| --- | --- | --- |
+| `--host-bootstrap-stdin` | `engineering-catalog.json` | 9 build, session and diagnostic tools |
+| `--host-editor-bootstrap-stdin` | `engineering-editor-catalog.json` | 15 tools including source operations |
+| `--host-debug-bootstrap-stdin` | `engineering-debug-catalog.json` | 11 tools including read-only PLC observations |
+
+The schema 2 receipt records the hashes of the three catalogs under
+`catalogs.build`, `catalogs.editor` and `catalogs.debug`. Each catalog is a
+standalone release asset and has identical bytes inside the runtime ZIP. The
+receipt lists SHA-256 and size for both ZIPs, all three catalogs and all three npm
+tarballs. Consumers should pin the receipt and every asset they download.
+Node.js 20 or newer is required on the target host.
+
+Hosts use `CreateWithInteropTypes` with nine parameters and supply the trusted
+interop type callback. Source callbacks belong to the Editor profile.
+The XML editor supports an approved apply and rollback. The ordinary TwinCAT
+ST editor supports read and preview. Debug reads require a bound, already logged-in
+project and a native operator grant for the confirmed ADS endpoint and exact symbols.
+The fixture exercises the packaged transport and catalogs with no live PLC or IDE.
+
+## Historical Engineering 0.5.4 diagnostics release
 
 The `engineering-v0.5.4` GitHub channel uses the same clean-source build,
 five primary assets, separate nine-tool catalog and schema 1 receipt as 0.5.3.

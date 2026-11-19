@@ -1,10 +1,10 @@
 param(
-    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/engineering-release-0.5.4')
+    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/engineering-release-0.5.5')
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$version = '0.5.4'
+$version = '0.5.5'
 $tag = "engineering-v$version"
 
 function Invoke-Checked([string]$Command, [string[]]$Arguments) {
@@ -46,6 +46,7 @@ try {
         $dll = Join-Path $snapshot 'native/Engineering.Host/bin/Release/net472/TwinCatMcp.Engineering.Host.dll'
         $assemblyVersion = [System.Reflection.AssemblyName]::GetAssemblyName($dll).Version.ToString()
         if ($assemblyVersion -ne '1.0.0.0') { throw "Unexpected host assembly version: $assemblyVersion" }
+        Invoke-Checked powershell.exe @('-NoProfile', '-NonInteractive', '-File', (Join-Path $snapshot 'scripts/Test-EngineeringReleaseFactory.ps1'), $dll)
         foreach ($package in @('twincat-mcp-core', 'twincat-mcp', 'pi-twincat-ads')) {
             Invoke-Checked npm @('pack', '--workspace', $package, '--pack-destination', $output)
         }
@@ -69,12 +70,29 @@ try {
         New-Item -ItemType Directory -Path $nativeDestination -Force | Out-Null
         Copy-Item (Join-Path $snapshot 'native/Engineering.Host/*.cs') -Destination $nativeDestination
         Copy-Item $hostProject -Destination $nativeDestination
-        $catalog = Join-Path $stage 'engineering-catalog.json'
         $helper = Join-Path $snapshot 'scripts/engineering-release-catalog.mjs'
-        Invoke-Checked node @($helper, 'catalog', $snapshot, $catalog)
-        $catalogHash = Get-Sha256 $catalog
+        $catalogPaths = [ordered]@{
+            build = 'engineering-catalog.json'
+            editor = 'engineering-editor-catalog.json'
+            debug = 'engineering-debug-catalog.json'
+        }
+        $catalogs = [ordered]@{}
+        foreach ($profile in $catalogPaths.Keys) {
+            $filename = $catalogPaths[$profile]
+            $catalog = Join-Path $output $filename
+            Invoke-Checked node @($helper, 'catalog', $snapshot, $catalog, $profile)
+            $catalogs[$profile] = [ordered]@{ path = $filename; sha256 = (Get-Sha256 $catalog) }
+            Copy-Item -LiteralPath $catalog -Destination $stage
+        }
         $materialized = Join-Path $output 'runtime-materialized'
         Invoke-Checked node @($helper, 'copy-runtime', $stage, $materialized)
+        $previousTestRuntime = $env:TWINCAT_MCP_RELEASE_RUNTIME
+        try {
+            $env:TWINCAT_MCP_RELEASE_RUNTIME = $materialized
+            Invoke-Checked npm @('run', 'test', '--workspace', 'twincat-mcp', '--', 'tests/engineering-bootstrap-integration.test.ts')
+        } finally {
+            $env:TWINCAT_MCP_RELEASE_RUNTIME = $previousTestRuntime
+        }
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $runtimeZip = Join-Path $output "$tag-runtime-win-x86.zip"
         $archive = [System.IO.Compression.ZipFile]::Open($runtimeZip, [System.IO.Compression.ZipArchiveMode]::Create)
@@ -85,13 +103,21 @@ try {
                 [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $_.FullName, $entry, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
             }
         } finally { $archive.Dispose() }
-        $assets = @($sourceZip, $runtimeZip) + @(Get-ChildItem -LiteralPath $output -Filter '*.tgz' | ForEach-Object FullName)
-        if ($assets.Count -ne 5) { throw 'Expected source, runtime and three npm package assets.' }
+        $npmAssets = @(Get-ChildItem -LiteralPath $output -Filter '*.tgz' | ForEach-Object FullName)
+        if ($npmAssets.Count -ne 3) { throw 'Expected three npm package assets.' }
+        $assets = @($sourceZip, $runtimeZip) + @($catalogPaths.Values | ForEach-Object { Join-Path $output $_ }) + $npmAssets
         $receipt = [ordered]@{
-            schemaVersion = 1; version = $version; tag = $tag; sourceCommit = $commit; protocolVersion = 1; sourceFeatures = 'disabled'
-            nativeFactory = [ordered]@{ type = 'TwinCatMcp.Engineering.Host.EngineeringProviderFactory'; method = 'CreateWithHostAccess'; parameterCount = 7; getTextBuffer = $null }
+            schemaVersion = 2; version = $version; tag = $tag; sourceCommit = $commit; protocolVersion = 1; sourceFeatures = 'profile-scoped'
+            nativeFactory = [ordered]@{
+                type = 'TwinCatMcp.Engineering.Host.EngineeringProviderFactory'
+                method = 'CreateWithInteropTypes'
+                parameterCount = 9
+                getTextBuffer = 'editor-only'
+                getSectionEditor = 'editor-only'
+                getInteropType = 'required'
+            }
             module = [ordered]@{ assembly = 'TwinCatMcp.Engineering.Host.dll'; assemblyVersion = $assemblyVersion; sha256 = (Get-Sha256 $dll); sourceTreeSha256 = $sourceDigest }
-            catalog = [ordered]@{ path = 'engineering-catalog.json'; sha256 = $catalogHash }
+            catalogs = $catalogs
             runtimeEntry = 'packages/mcp/dist/index.js'
             assets = @($assets | ForEach-Object { $item = Get-Item -LiteralPath $_; [ordered]@{ filename = $item.Name; sha256 = (Get-Sha256 $item.FullName); size = $item.Length } })
         }

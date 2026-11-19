@@ -4,6 +4,8 @@ import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -51,9 +53,16 @@ describe("engineering child host handshake", () => {
       expect(binding.sessionId).toBe(sessionId);
       binding.client.dispose();
 
-      const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
-      for (const [arg, count] of [["--host-bootstrap-stdin", 9], ["--host-editor-bootstrap-stdin", 15],
-        ["--host-debug-bootstrap-stdin", 11]] as const) {
+      const releaseRuntime = process.env.TWINCAT_MCP_RELEASE_RUNTIME;
+      const entry = releaseRuntime === undefined ? fileURLToPath(new URL("../dist/index.js", import.meta.url))
+        : join(releaseRuntime, "packages/mcp/dist/index.js");
+      const releaseVersion = releaseRuntime === undefined ? undefined
+        : JSON.parse(await readFile(join(releaseRuntime, "packages/mcp/package.json"), "utf8")).version;
+      for (const [arg, count, catalog] of [
+        ["--host-bootstrap-stdin", 9, "engineering-catalog.json"],
+        ["--host-editor-bootstrap-stdin", 15, "engineering-editor-catalog.json"],
+        ["--host-debug-bootstrap-stdin", 11, "engineering-debug-catalog.json"],
+      ] as const) {
         const child = spawn(process.execPath, [entry, arg], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
         const terminated = once(child, "exit");
         const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
@@ -68,10 +77,18 @@ describe("engineering child host handshake", () => {
           expect(await next()).toMatchObject({ kind: "twincat-assistant-engineering-ready", sessionId });
           child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
             params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } }) + "\n");
-          expect(await next()).toMatchObject({ id: 1, result: { protocolVersion: "2024-11-05" } });
+          const initialized = await next();
+          expect(initialized).toMatchObject({ id: 1, result: { protocolVersion: "2024-11-05" } });
+          if (releaseVersion !== undefined) expect(initialized.result.serverInfo.version).toBe(releaseVersion);
           child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
           child.stdin.write('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n');
-          const names = (await next()).result.tools.map((tool: { name: string }) => tool.name);
+          const tools = (await next()).result.tools;
+          if (releaseRuntime !== undefined) {
+            const expected = JSON.parse(await readFile(join(releaseRuntime, catalog), "utf8"));
+            expect(expected.schemaVersion).toBe(1);
+            expect(tools).toEqual(expected.tools);
+          }
+          const names = tools.map((tool: { name: string }) => tool.name);
           expect(new Set(names).size).toBe(count);
           expect(names.includes("plc_source_apply")).toBe(count === 15);
           expect(names.includes("plc_debug_read")).toBe(count === 11);
