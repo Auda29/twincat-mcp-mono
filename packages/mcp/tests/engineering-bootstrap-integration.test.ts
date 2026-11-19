@@ -2,6 +2,10 @@ import { createHash, createHmac } from "node:crypto";
 import { createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { PassThrough } from "node:stream";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { bootstrapEngineeringHost } from "../src/engineering-bootstrap.js";
 
@@ -37,14 +41,47 @@ describe("engineering child host handshake", () => {
       });
     });
     await new Promise<void>((resolve) => server.listen(pipeName, resolve));
+    const bootstrap = JSON.stringify({ kind: "twincat-assistant-engineering-bootstrap", protocolVersion: 1, pipeName, sessionId,
+        capability: key.toString("hex"), expected: { idePid: 123, ideStartedUtc: "2026-01-01T00:00:00Z",
+          solutionFile: "C:\\fixture\\a.sln", projectFile: "C:\\fixture\\a.plcproj", contextEpoch: "1" } }) + "\n";
     try {
       const input = new PassThrough();
-      input.write(JSON.stringify({ kind: "twincat-assistant-engineering-bootstrap", protocolVersion: 1, pipeName, sessionId,
-        capability: key.toString("hex"), expected: { idePid: 123, ideStartedUtc: "2026-01-01T00:00:00Z",
-          solutionFile: "C:\\fixture\\a.sln", projectFile: "C:\\fixture\\a.plcproj", contextEpoch: "1" } }) + "\n");
+      input.write(bootstrap);
       const binding = await bootstrapEngineeringHost(input);
       expect(binding.sessionId).toBe(sessionId);
       binding.client.dispose();
+
+      const entry = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+      for (const [arg, count] of [["--host-bootstrap-stdin", 9], ["--host-editor-bootstrap-stdin", 15]] as const) {
+        const child = spawn(process.execPath, [entry, arg], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+        const terminated = once(child, "exit");
+        const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+        const timer = setTimeout(() => child.kill(), 5000);
+        const next = async () => {
+          const frame = await lines.next();
+          if (frame.done) throw new Error("Host child exited before replying");
+          return JSON.parse(frame.value);
+        };
+        try {
+          child.stdin.write(bootstrap);
+          expect(await next()).toMatchObject({ kind: "twincat-assistant-engineering-ready", sessionId });
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize",
+            params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "fixture", version: "1" } } }) + "\n");
+          expect(await next()).toMatchObject({ id: 1, result: { protocolVersion: "2024-11-05" } });
+          child.stdin.write('{"jsonrpc":"2.0","method":"notifications/initialized"}\n');
+          child.stdin.write('{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}\n');
+          const names = (await next()).result.tools.map((tool: { name: string }) => tool.name);
+          expect(new Set(names).size).toBe(count);
+          expect(names.includes("plc_source_apply")).toBe(count === 15);
+          expect(names).not.toContain("plc_write");
+          expect(names).not.toContain("plc_read");
+        } finally {
+          clearTimeout(timer);
+          child.stdin.end();
+          child.kill();
+          await terminated;
+        }
+      }
     } finally { server.close(); }
-  });
+  }, 15000);
 });

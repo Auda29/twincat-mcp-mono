@@ -7,8 +7,17 @@ Every `source.*` operation is rejected before service construction or approval;
 all source capabilities are unsupported. The dedicated Node child exposes nine
 session/build/diagnostic tools. All development source code and factories remain
 present; the fifteen-tool development catalog requires trusted in-code
-`enableDevelopmentSourceTools:true` and is never enabled by CLI/bootstrap/model
-arguments. Native development factories remain opt-in host APIs.
+`enableDevelopmentSourceTools:true` in those published artifacts. Native
+development factories remain opt-in host APIs.
+
+The unpublished Assistant integration can launch an owned child with the single
+argument `--host-editor-bootstrap-stdin`. It authenticates the same stdin
+bootstrap and pipe as `--host-bootstrap-stdin`, then exposes the six existing
+source definitions in addition to the nine build/session/diagnostic tools.
+Neither host mode connects to ADS. Catalog selection is not native authorization.
+Source mutations still require an applicable XML-buffer preview, exact document
+and baseline checks, and the host's separate approval. The attached normal
+TwinCAT ST editor still supports read-only preview.
 
 The published tag `engineering-v0.5.3` pins commit
 `99de69b8cedec780a68a89a631132ea6eb76cf0b`; see

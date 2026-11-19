@@ -143,8 +143,8 @@ export function createLiveEngineeringToolDefinitions(
     source("plc_source_rollback", "source.rollback", rollbackInput, "Restore a journaled pre-image after separate native approval, only if the current whole buffer equals its exact post-image. Does not save.", true),
     source("plc_source_journal", "source.journal", journalInput, "Read the retained session-memory journal, including unknown outcomes. Journals do not survive provider disposal or restart."),
   ];
-  // Release defaults retain build/session tools only. The source definitions
-  // remain available through a trusted in-code development opt-in, never CLI,
-  // bootstrap data, configuration or model tool arguments.
+  // Build-mode callers retain the nine-tool catalog. The authenticated Editor
+  // child can publish source definitions. The host still authorizes operations
+  // and validates the source adapter and native approval before a mutation.
   return options.enableDevelopmentSourceTools === true ? tools : tools.filter((tool) => !tool.name.startsWith("plc_source_"));
 }
