@@ -35,20 +35,28 @@ namespace TwinCatMcp.Engineering.Host
     internal sealed class BuildDteAdapter : IBuildIde
     {
         private readonly object dte;
-        private readonly Assembly interop;
+        private readonly EngineeringInteropTypes interopTypes;
         private readonly List<Action> unsubscribe = new List<Action>();
         public event Action<bool> BuildBegin;
         public event Action<string, string, string> ProjectBegin;
         public event Action<string, string, string, bool> ProjectDone;
         public event Action<bool> BuildDone;
 
-        internal BuildDteAdapter(object injectedDte)
+        internal BuildDteAdapter(object injectedDte, EngineeringInteropTypes interopTypes = null)
         {
             dte = injectedDte;
-            interop = AppDomain.CurrentDomain.GetAssemblies().FirstOrDefault(a =>
-                (string.Equals(a.GetName().Name, "EnvDTE", StringComparison.OrdinalIgnoreCase) || a.GetName().Name == "Microsoft.VisualStudio.Interop") &&
-                a.GetType("EnvDTE.DTE", false) != null);
-            if (dte == null || interop == null) Unsupported();
+            this.interopTypes = interopTypes ?? new EngineeringInteropTypes();
+            Type dteType;
+            try { dteType = this.interopTypes.Resolve("EnvDTE.DTE"); }
+            catch (PlcProjectAssociationException error) {
+                // Preserve the legacy no-interop build capability response.
+                if (!this.interopTypes.IsAuthoritative && error.Code == "association_interop_missing_envdte_dte") Unsupported();
+                throw;
+            }
+            if (dte == null || !dteType.IsInstanceOfType(dte)) Unsupported();
+            // Legacy build discovery must not broaden its original assembly set.
+            var assemblyName = dteType.Assembly.GetName().Name;
+            if (!this.interopTypes.IsAuthoritative && !string.Equals(assemblyName, "EnvDTE", StringComparison.OrdinalIgnoreCase) && assemblyName != "Microsoft.VisualStudio.Interop") Unsupported();
             try
             {
                 var events = Get(dte, "DTE", "Events");
@@ -58,6 +66,7 @@ namespace TwinCatMcp.Engineering.Host
                 Subscribe(builds, "OnBuildProjConfigDone", a => { var handler = ProjectDone; if (handler != null) handler((string)a[0], (string)a[1], (string)a[2], (bool)a[4]); });
                 Subscribe(builds, "OnBuildDone", a => { var handler = BuildDone; if (handler != null) handler(IsProjectBuild(a)); });
             }
+            catch (PlcProjectAssociationException) { Dispose(); throw; }
             catch { Dispose(); Unsupported(); }
         }
 
@@ -68,13 +77,17 @@ namespace TwinCatMcp.Engineering.Host
 
         private object Get(object instance, string type, string name)
         {
-            var declaring = DeclaringType(interop.GetType("EnvDTE." + type, true), name);
+            var contract = interopTypes.Resolve("EnvDTE." + type);
+            if (instance == null || !contract.IsInstanceOfType(instance)) Unsupported();
+            var declaring = DeclaringType(contract, name);
             return declaring.InvokeMember(name, BindingFlags.GetProperty, null, instance, new object[0], CultureInfo.InvariantCulture);
         }
 
         private object Call(object instance, string type, string name, params object[] arguments)
         {
-            var declaring = DeclaringType(interop.GetType("EnvDTE." + type, true), name);
+            var contract = interopTypes.Resolve("EnvDTE." + type);
+            if (instance == null || !contract.IsInstanceOfType(instance)) Unsupported();
+            var declaring = DeclaringType(contract, name);
             return declaring.InvokeMember(name, BindingFlags.InvokeMethod, null, instance, arguments, CultureInfo.InvariantCulture);
         }
 
@@ -97,7 +110,11 @@ namespace TwinCatMcp.Engineering.Host
 
         private void Subscribe(object builds, string name, Action<object[]> callback)
         {
-            var type = interop.GetType("EnvDTE._dispBuildEvents_Event", true);
+            var type = interopTypes.Resolve("EnvDTE._dispBuildEvents_Event");
+            // This is generated managed event plumbing, not necessarily a COM
+            // QI interface. EventInfo owns the exact target compatibility check.
+            // The target itself came from the selected bound DTE.Events getter.
+            if (builds == null) Unsupported();
             var info = type.GetEvent(name);
             if (info == null) Unsupported();
             var signature = info.EventHandlerType.GetMethod("Invoke");
@@ -119,7 +136,7 @@ namespace TwinCatMcp.Engineering.Host
             if (IsBuilding) Refuse("build_already_running");
             var solution = Solution;
             if (!Same((string)Get(solution, "Solution", "FullName"), solutionFile) || !(bool)Get(solution, "Solution", "Saved")) Refuse("solution_not_clean");
-            var association = new PlcProjectAssociationService(dte).Resolve(solutionFile, projectFile, () => {
+            var association = new PlcProjectAssociationService(dte, interopTypes).Resolve(solutionFile, projectFile, () => {
                 if (!Same((string)Get(Solution, "Solution", "FullName"), solutionFile)) Refuse("solution_changed");
             });
             if (association.Status != "succeeded") Refuse("unverified_plc_association");
@@ -183,20 +200,21 @@ namespace TwinCatMcp.Engineering.Host
             return (string)TcGet(config, "ITcConfigManager", "ActiveTargetPlatform");
         }
 
-        private static string SolutionPlatform(object configuration)
+        private string SolutionPlatform(object configuration)
         {
-            var types = AppDomain.CurrentDomain.GetAssemblies().Where(a => a.GetName().Name == "EnvDTE80" || a.GetName().Name == "Microsoft.VisualStudio.Interop")
-                .Select(a => a.GetType("EnvDTE80.SolutionConfiguration2", false)).Where(t => t != null).Distinct().ToArray();
-            if (types.Length != 1 || configuration == null || !types[0].IsInstanceOfType(configuration)) throw new NativeBuildException("unsupported", "solution_platform_evidence_unavailable");
-            return (string)DeclaringType(types[0], "PlatformName").InvokeMember("PlatformName", BindingFlags.GetProperty, null, configuration, new object[0], CultureInfo.InvariantCulture);
+            var type = interopTypes.Resolve("EnvDTE80.SolutionConfiguration2");
+            if (configuration == null || !type.IsInstanceOfType(configuration)) throw new NativeBuildException("unsupported", "solution_platform_evidence_unavailable");
+            return (string)DeclaringType(type, "PlatformName").InvokeMember("PlatformName", BindingFlags.GetProperty, null, configuration, new object[0], CultureInfo.InvariantCulture);
         }
 
-        private static object TcGet(object instance, string typeName, string member)
+        private object TcGet(object instance, string typeName, string member)
         {
-            var types = AppDomain.CurrentDomain.GetAssemblies().Where(a => a.GetName().Name == "TCatSysManagerLib" || a.GetName().Name == "Interop.TCatSysManagerLib")
-                .Select(a => a.GetType("TCatSysManagerLib." + typeName, false)).Where(t => t != null).Distinct().ToArray();
-            if (types.Length != 1 || instance == null || !types[0].IsInstanceOfType(instance)) throw new NativeBuildException("unsupported", "build_platform_evidence_unavailable");
-            return DeclaringType(types[0], member).InvokeMember(member, BindingFlags.GetProperty, null, instance, new object[0], CultureInfo.InvariantCulture);
+            var type = interopTypes.Resolve("TCatSysManagerLib." + typeName);
+            var assemblyName = type.Assembly.GetName().Name;
+            if (!interopTypes.IsAuthoritative && assemblyName != "TCatSysManagerLib" && assemblyName != "Interop.TCatSysManagerLib")
+                throw new NativeBuildException("unsupported", "build_platform_evidence_unavailable");
+            if (instance == null || !type.IsInstanceOfType(instance)) throw new NativeBuildException("unsupported", "build_platform_evidence_unavailable");
+            return DeclaringType(type, member).InvokeMember(member, BindingFlags.GetProperty, null, instance, new object[0], CultureInfo.InvariantCulture);
         }
 
         private void Find(object project, string file, List<object> matches, ref int budget, int depth)
@@ -219,7 +237,7 @@ namespace TwinCatMcp.Engineering.Host
 
         public bool IsCurrent(BuildTarget target, string solutionFile, string projectFile)
         {
-            var association = new PlcProjectAssociationService(dte).Resolve(solutionFile, projectFile, () => {
+            var association = new PlcProjectAssociationService(dte, interopTypes).Resolve(solutionFile, projectFile, () => {
                 if (!Same((string)Get(Solution, "Solution", "FullName"), solutionFile)) Refuse("solution_changed");
             });
             return association.Status == "succeeded" && Same(association.TwinCatProjectFile, target.OwningProjectFile) && association.MappingDigest == target.MappingDigest &&

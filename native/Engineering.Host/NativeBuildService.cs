@@ -32,8 +32,8 @@ namespace TwinCatMcp.Engineering.Host
         private Run active;
         private bool disposed;
 
-        internal NativeBuildService(object injectedDte, Func<string, bool?> authoritativeDirty)
-            : this(new BuildDteAdapter(injectedDte), authoritativeDirty, () => DateTime.UtcNow) { }
+        internal NativeBuildService(object injectedDte, Func<string, bool?> authoritativeDirty, EngineeringInteropTypes interopTypes = null)
+            : this(new BuildDteAdapter(injectedDte, interopTypes), authoritativeDirty, () => DateTime.UtcNow) { }
 
         internal NativeBuildService(IBuildIde ide, Func<string, bool?> authoritativeDirty, Func<DateTime> utcNow)
         {

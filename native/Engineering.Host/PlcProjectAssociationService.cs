@@ -52,6 +52,7 @@ namespace TwinCatMcp.Engineering.Host
         private const int MaxXml = 1048576;
         private readonly IPlcProjectAssociationAccess access;
         internal PlcProjectAssociationService(object injectedDte) : this(new ReflectedPlcProjectAssociationAccess(injectedDte)) { }
+        internal PlcProjectAssociationService(object injectedDte, EngineeringInteropTypes types) : this(new ReflectedPlcProjectAssociationAccess(injectedDte, types)) { }
         internal PlcProjectAssociationService(IPlcProjectAssociationAccess access)
         { if (access == null) throw new ArgumentNullException("access"); this.access = access; }
 
@@ -233,45 +234,107 @@ namespace TwinCatMcp.Engineering.Host
         private static void Unsupported(string code) { throw new PlcProjectAssociationException("unsupported", code); }
     }
 
-    internal sealed class ReflectedPlcProjectAssociationAccess : IPlcProjectAssociationAccess
+    // One type policy is shared by association and build access. Authoritative
+    // bindings are a trusted host input, not a request/model-selectable value.
+    internal sealed class EngineeringInteropTypes
     {
-        // Fixed diagnostic identifiers only: never echo arbitrary type names,
-        // assembly paths or loader exception messages into provider responses.
-        private static readonly Dictionary<string, string> interfaceDiagnostics = new Dictionary<string, string>(StringComparer.Ordinal) {
-            { "EnvDTE.DTE", "envdte_dte" },
-            { "EnvDTE.Solution", "envdte_solution" },
-            { "EnvDTE.Projects", "envdte_projects" },
-            { "EnvDTE.Project", "envdte_project" },
-            { "EnvDTE.ProjectItems", "envdte_projectitems" },
-            { "EnvDTE.ProjectItem", "envdte_projectitem" },
-            { "TCatSysManagerLib.ITcSysManager", "tcatsysmanagerlib_itcsysmanager" },
-            { "TCatSysManagerLib.ITcSmTreeItem", "tcatsysmanagerlib_itcsmtreeitem" }
+        private static readonly string[] names = {
+            "EnvDTE.DTE", "EnvDTE.Events", "EnvDTE._dispBuildEvents_Event", "EnvDTE.Solution",
+            "EnvDTE.Projects", "EnvDTE.Project", "EnvDTE.ProjectItems", "EnvDTE.ProjectItem",
+            "EnvDTE.Documents", "EnvDTE.Document", "EnvDTE.SolutionBuild", "EnvDTE.SolutionConfiguration",
+            "EnvDTE.SolutionContexts", "EnvDTE.SolutionContext", "EnvDTE.BuildDependencies", "EnvDTE.BuildDependency",
+            "EnvDTE.Windows", "EnvDTE.Window", "EnvDTE.OutputWindow", "EnvDTE.OutputWindowPanes",
+            "EnvDTE.OutputWindowPane", "EnvDTE.TextDocument", "EnvDTE.TextPoint", "EnvDTE.EditPoint",
+            "EnvDTE80.SolutionConfiguration2", "TCatSysManagerLib.ITcSysManager", "TCatSysManagerLib.ITcSmTreeItem",
+            "TCatSysManagerLib.ITcSysManager7", "TCatSysManagerLib.ITcConfigManager"
         };
-        public object Dte { get; private set; }
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
-        internal ReflectedPlcProjectAssociationAccess(object dte) { if (dte == null) throw new ArgumentNullException("dte"); Dte = dte; }
-        private Type Resolve(string name)
+        private readonly Dictionary<string, string> errors = new Dictionary<string, string>(StringComparer.Ordinal);
+        private readonly Dictionary<string, Assembly> families = new Dictionary<string, Assembly>(StringComparer.Ordinal);
+        internal bool IsAuthoritative { get; private set; }
+        internal EngineeringInteropTypes() { }
+        internal EngineeringInteropTypes(Func<string, Type> getInteropType)
+        {
+            if (getInteropType == null) throw new ArgumentNullException("getInteropType");
+            IsAuthoritative = true;
+            // The callback must not acquire/load an assembly as a side effect.
+            var loaded = AppDomain.CurrentDomain.GetAssemblies();
+            foreach (var name in names) {
+                try {
+                    var type = getInteropType(name);
+                    if (type == null) errors[name] = "missing";
+                    else if (type.GetType() != typeof(object).GetType() || type.FullName != name || !type.IsInterface || !type.IsPublic ||
+                        type.ContainsGenericParameters || type.IsGenericType || type.Assembly.ReflectionOnly || type.Assembly.IsDynamic ||
+                        !loaded.Any(a => ReferenceEquals(a, type.Assembly))) errors[name] = "invalid";
+                    else types.Add(name, type);
+                } catch { errors[name] = "inspection_failed"; }
+            }
+            foreach (var prefix in new[] { "EnvDTE.", "TCatSysManagerLib." }) {
+                var members = types.Keys.Where(n => n.StartsWith(prefix, StringComparison.Ordinal)).ToArray();
+                if (members.Length > 1 && members.Any(n => !ReferenceEquals(types[n].Assembly, types[members[0]].Assembly)))
+                    foreach (var name in members) { types.Remove(name); errors[name] = "family_mismatch"; }
+            }
+            Type platform, configuration;
+            try {
+                if (types.TryGetValue("EnvDTE80.SolutionConfiguration2", out platform) &&
+                    (!types.TryGetValue("EnvDTE.SolutionConfiguration", out configuration) ||
+                    !platform.GetInterfaces().Any(t => ReferenceEquals(t, configuration)))) {
+                    types.Remove("EnvDTE80.SolutionConfiguration2"); errors["EnvDTE80.SolutionConfiguration2"] = "inheritance_mismatch";
+                }
+            } catch { types.Remove("EnvDTE80.SolutionConfiguration2"); errors["EnvDTE80.SolutionConfiguration2"] = "inspection_failed"; }
+        }
+        internal Type Resolve(string name)
         {
             Type type;
-            if (types.TryGetValue(name, out type)) return type;
+            if (!names.Contains(name, StringComparer.Ordinal)) throw Failure("missing", name);
+            if (IsAuthoritative) {
+                string error;
+                if (errors.TryGetValue(name, out error)) throw Failure(error, name);
+                if (types.TryGetValue(name, out type)) return type;
+                throw Failure("missing", name);
+            }
             Type[] matches;
             try {
                 matches = AppDomain.CurrentDomain.GetAssemblies().Where(a => {
                     var assembly = a.GetName().Name;
+                    if (name.StartsWith("EnvDTE80.", StringComparison.Ordinal)) return assembly == "EnvDTE80" || assembly == "Microsoft.VisualStudio.Interop";
+                    if (name == "TCatSysManagerLib.ITcSysManager7" || name == "TCatSysManagerLib.ITcConfigManager")
+                        return assembly == "TCatSysManagerLib" || assembly == "Interop.TCatSysManagerLib";
                     return string.Equals(assembly, "EnvDTE", StringComparison.OrdinalIgnoreCase) || assembly == "Microsoft.VisualStudio.Interop" || assembly == "TCatSysManagerLib" || assembly == "Interop.TCatSysManagerLib";
                 }).Select(a => a.GetType(name, false)).Where(t => t != null).Distinct().ToArray();
             }
-            catch { throw InteropFailure("inspection_failed", name); }
-            if (matches.Length == 0) throw InteropFailure("missing", name);
-            if (matches.Length != 1) throw InteropFailure("ambiguous", name);
-            types.Add(name, matches[0]); return matches[0];
+            catch { throw Failure("inspection_failed", name); }
+            if (matches.Length == 0) throw Failure("missing", name);
+            if (matches.Length != 1) throw Failure("ambiguous", name);
+            type = matches[0];
+            if (name == "EnvDTE80.SolutionConfiguration2") {
+                try { if (!type.GetInterfaces().Any(t => ReferenceEquals(t, Resolve("EnvDTE.SolutionConfiguration")))) throw Failure("inheritance_mismatch", name); }
+                catch (PlcProjectAssociationException) { throw; }
+                catch { throw Failure("inspection_failed", name); }
+            }
+            string family = name.StartsWith("EnvDTE.", StringComparison.Ordinal) ? "EnvDTE" : name.StartsWith("TCatSysManagerLib.", StringComparison.Ordinal) ? "TCat" : null;
+            Assembly prior;
+            if (family != null) {
+                if (families.TryGetValue(family, out prior) && !ReferenceEquals(prior, type.Assembly)) throw Failure("family_mismatch", name);
+                families[family] = type.Assembly;
+            }
+            return type;
         }
-        private static PlcProjectAssociationException InteropFailure(string reason, string name)
+        private static PlcProjectAssociationException Failure(string reason, string name)
         {
-            string identifier;
-            if (name == null || !interfaceDiagnostics.TryGetValue(name, out identifier)) identifier = "unknown_interface";
+            var identifier = names.Contains(name, StringComparer.Ordinal) ? name.ToLowerInvariant().Replace('.', '_') : "unknown_interface";
             return new PlcProjectAssociationException("unsupported", "association_interop_" + reason + "_" + identifier);
         }
+    }
+
+    internal sealed class ReflectedPlcProjectAssociationAccess : IPlcProjectAssociationAccess
+    {
+        public object Dte { get; private set; }
+        private readonly EngineeringInteropTypes types;
+        internal ReflectedPlcProjectAssociationAccess(object dte) : this(dte, new EngineeringInteropTypes()) { }
+        internal ReflectedPlcProjectAssociationAccess(object dte, EngineeringInteropTypes types)
+        { if (dte == null || types == null) throw new ArgumentNullException(); Dte = dte; this.types = types; }
+        private Type Resolve(string name) { return types.Resolve(name); }
         public bool Supports(object target, string name) { return target != null && Resolve(name).IsInstanceOfType(target); }
         private static Type Declaring(Type type, string member)
         { return new[] { type }.Concat(type.GetInterfaces()).First(t => t.GetMember(member, BindingFlags.Public | BindingFlags.Instance).Length != 0); }

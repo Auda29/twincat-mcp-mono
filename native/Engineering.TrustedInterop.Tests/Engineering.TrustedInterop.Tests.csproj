@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <LangVersion>latest</LangVersion>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="SyntheticA/**/*.cs;SyntheticB/**/*.cs" />
+    <Compile Include="../Engineering.Host/PlcProjectAssociationService.cs" Link="PlcProjectAssociationService.cs" />
+    <ProjectReference Include="../Engineering.BuildAdapter.Tests/EnvDteFixture/EnvDteFixture.csproj" />
+    <ProjectReference Include="../Engineering.BuildAdapter.Tests/TcFixture/TcFixture.csproj" />
+    <ProjectReference Include="SyntheticA/SyntheticA.csproj" Aliases="syntheticA" />
+    <ProjectReference Include="SyntheticB/SyntheticB.csproj" Aliases="syntheticB" />
+  </ItemGroup>
+</Project>
