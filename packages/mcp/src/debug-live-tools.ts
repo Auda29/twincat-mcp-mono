@@ -2,14 +2,14 @@ import { AdsService, normalizeTwinCatAdsConfig, type PlcReadResult } from "twinc
 import { z } from "zod";
 import type { McpToolDefinition } from "./index.js";
 
-const symbolName = z.string().max(160).regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d{1,6}\])*$/);
-const netId = z.string().regex(/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){5}$/)
+const symbolName = z.string().max(160).regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d{1,6}\])*(?![\s\S])/);
+const netId = z.string().max(23).regex(/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){5}(?![\s\S])/)
   .refine(value => value !== "0.0.0.0.0.0" && value.split(".").every(octet => Number(octet) <= 255));
 const targetSchema = z.object({
   loggedIn: z.literal(true),
-  grantId: z.string().uuid(),
+  grantId: z.string().uuid().refine(value => value !== "00000000-0000-0000-0000-000000000000"),
   amsNetId: netId,
-  adsPort: z.number().int().min(1).max(65535),
+  adsPort: z.number().int().min(851).max(899),
   symbols: z.array(symbolName).min(1).max(32).refine(names => new Set(names).size === names.length),
 }).strict();
 const readInput = z.object({

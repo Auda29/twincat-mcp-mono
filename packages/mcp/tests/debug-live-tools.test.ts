@@ -40,6 +40,46 @@ describe("bound Debug ADS reads", () => {
     expect(open).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { adsPort: 850 },
+    { adsPort: 900 },
+    { adsPort: 856.5 },
+    { adsPort: "856" },
+    { grantId: "00000000-0000-0000-0000-000000000000" },
+    { amsNetId: "1.2.3.4.5.6\n" },
+    { symbols: ["MAIN.ready", "MAIN.ready"] },
+    { symbols: ["MAIN.ready\n"] },
+    { symbols: Array.from({ length: 33 }, (_, index) => "MAIN.a" + index) },
+  ])("rejects invalid trusted grant data before constructing a reader: %j", async (invalid) => {
+    const { read, open } = setup(vi.fn().mockResolvedValue(response({ ...grant, ...invalid })));
+    expect(await read.execute({ symbols: ["MAIN.ready"] })).toEqual({ status: "online_session_not_verified" });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("refuses extra client fields and invalid, duplicate or excessive requested symbols", async () => {
+    const { read, invoke, open } = setup();
+    for (const request of [
+      { symbols: ["MAIN.ready"], adsPort: 856 },
+      { symbols: ["MAIN.ready", "MAIN.ready"] },
+      { symbols: ["MAIN.ready\n"] },
+      { symbols: ["MAIN.*"] },
+      { symbols: Array.from({ length: 9 }, (_, index) => "MAIN.a" + index) },
+    ]) {
+      await expect(read.execute(request)).rejects.toThrow();
+    }
+    expect(invoke).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("does not read a symbol after the native target changes", async () => {
+    const invoke = vi.fn().mockResolvedValueOnce(response())
+      .mockResolvedValueOnce(response({ ...grant, adsPort: 857 }));
+    const { read, readSymbol, disconnect } = setup(invoke);
+    expect(await read.execute({ symbols: ["MAIN.ready"] })).toEqual({ status: "online_context_changed" });
+    expect(readSymbol).not.toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
   it("discards the sample and ends the connection when the grant changes", async () => {
     const invoke = vi.fn().mockResolvedValueOnce(response()).mockResolvedValueOnce(response())
       .mockResolvedValueOnce(response({ ...grant, grantId: randomUUID() }));
