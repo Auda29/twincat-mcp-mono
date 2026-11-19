@@ -38,6 +38,14 @@ eight timestamped scalar samples and discard readings if the grant changes.
 The host-side runtime observation and consent flow must be implemented before
 this catalog can be adopted.
 
+The in-process `project.online` operation is a read-only observation for the
+native host. It takes no arguments and requires authoritative interop bindings.
+It reuses the exact PLC association and checks `ITcPlcOnline.IsLoggedIn` on
+the selected nested PLC project. The configured Net ID is reported separately,
+when canonical. A changed target or login state during capture is refused.
+The result always carries `runtimeAddressVerified: false`: configuration and
+login observations do not verify the ADS port or authorize a Debug grant.
+
 The published tag `engineering-v0.5.3` pins commit
 `99de69b8cedec780a68a89a631132ea6eb76cf0b`; see
 [release assets and integrity verification](release-flow.md). Protocol 1 and

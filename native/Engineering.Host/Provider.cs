@@ -181,7 +181,7 @@ namespace TwinCatMcp.Engineering.Host
             // Observations never consume the non-evicting mutation replay budget.
             // Their UUIDs are not cached: repeating a poll obtains a fresh view.
             if (requestedName == "session.ping" || requestedName == "session.describe" ||
-                requestedName == "project.association" || requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read" || requestedName == "source.journal" || requestedName == "source.targets")
+                requestedName == "project.association" || requestedName == "project.online" || requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read" || requestedName == "source.journal" || requestedName == "source.targets")
             {
                 try { return DispatchValidated(requestJson, request, json, session, operation); }
                 catch { return Failure(json, session, operation, "unknown", "dispatch_failed"); }
@@ -335,6 +335,24 @@ namespace TwinCatMcp.Engineering.Host
                     var sourceDirty = result.Result != null && result.Result.TryGetValue("dirtyState", out observedDirty) ? observedDirty as string : "unknown";
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = result.Status,
                         provenance = Provenance(null, isLive ? "liveBuffer" : "unknown", sourceDirty ?? "unknown"), error = result.ErrorCode, result = result.Result });
+                }
+                if (name == "project.online")
+                {
+                    if (args == null || args.Count != 0) return Failure(json, session, operation, "refused", "invalid_online_arguments");
+                    if (!interopTypes.IsAuthoritative) return Failure(json, session, operation, "unsupported", "online_interop_unavailable");
+                    PlcOnlineObservation observation = null;
+                    var association = new PlcProjectAssociationService(dte, interopTypes).Resolve(current.SolutionFile, current.ProjectFile,
+                        () => ValidateContext(expected, currentContext(), session), (manager, plc, _) =>
+                        {
+                            try { observation = PlcOnlineObservation.Capture(interopTypes, manager, plc); }
+                            catch { /* No trustworthy observation is available. */ }
+                        });
+                    if (association.Status != "succeeded") return Failure(json, session, operation, association.Status, association.ErrorCode);
+                    if (observation == null) return Failure(json, session, operation, "unsupported", "online_observation_unavailable");
+                    return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"),
+                        status = "succeeded", provenance = Provenance(null),
+                        result = new { loggedIn = observation.LoggedIn, configuredAmsNetId = observation.ConfiguredAmsNetId,
+                            runtimeAddressVerified = false, mappingDigest = association.MappingDigest, observedAtUtc = association.ObservedAtUtc } });
                 }
                 if (name == "project.association")
                 {

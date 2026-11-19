@@ -56,7 +56,8 @@ namespace TwinCatMcp.Engineering.Host
         internal PlcProjectAssociationService(IPlcProjectAssociationAccess access)
         { if (access == null) throw new ArgumentNullException("access"); this.access = access; }
 
-        internal PlcProjectAssociationResult Resolve(string solutionFile, string projectFile, Action revalidateContext)
+        internal PlcProjectAssociationResult Resolve(string solutionFile, string projectFile, Action revalidateContext,
+            Action<object, object, string> observeSelectedPlc = null)
         {
             if (revalidateContext == null || !CanonicalFile(solutionFile, ".sln") || !CanonicalFile(projectFile, ".plcproj")) Refuse("invalid_association_target");
             try
@@ -134,6 +135,12 @@ namespace TwinCatMcp.Engineering.Host
                     var currentChild = Get(currentRoot, "TCatSysManagerLib.ITcSmTreeItem", "Child", revalidateContext, matchedChildIndex);
                     var currentXml = Text(Call(currentChild, "TCatSysManagerLib.ITcSmTreeItem", "ProduceXml", revalidateContext, false));
                     if (!string.Equals(currentXml, matchedXml, StringComparison.Ordinal) || !string.Equals(ProjectPath(currentXml), matchedPath, StringComparison.Ordinal)) Conflict("plc_association_changed");
+                    if (observeSelectedPlc != null)
+                    {
+                        Validate(revalidateContext);
+                        observeSelectedPlc(currentManager, currentChild, matchedTwinCatFile);
+                        Validate(revalidateContext);
+                    }
                     }
                     catch (PlcProjectAssociationException error)
                     {
