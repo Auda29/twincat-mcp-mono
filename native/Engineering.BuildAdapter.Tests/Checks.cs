@@ -47,14 +47,23 @@ sealed class Build : SolutionBuild
 }
 sealed class SolutionFixture : Solution { public string FullName {get;set;} public bool Saved {get;set;} public Projects Projects {get;set;} public SolutionBuild SolutionBuild {get;set;} }
 sealed class DteFixture : DTE { public Events Events {get;set;} public Solution Solution {get;set;} public Documents Documents {get;set;} }
-sealed class TcManager : ITcSysManager, ITcSysManager7 { public object ConfigurationManager {get;set;} internal object Root; public object LookupTreeItem(string name) { return name == "TIPC" ? Root : null; } }
+sealed class TcManager : ITcSysManager, ITcSysManager7, ITcSysManager2
+{
+    public object ConfigurationManager {get;set;}
+    internal object Root;
+    internal Func<string> ReadTarget = () => "1.2.3.4.5.6";
+    public object LookupTreeItem(string name) { return name == "TIPC" ? Root : null; }
+    public string GetTargetNetId() { return ReadTarget(); }
+}
 sealed class TcConfig : ITcConfigManager { public string ActiveTargetPlatform {get;set;} }
-sealed class Tree : ITcSmTreeItem
+sealed class Tree : ITcSmTreeItem, ITcProjectRoot, ITcPlcOnline
 {
     internal string Xml; internal object ChildItem;
     public int ChildCount { get { return ChildItem == null ? 0 : 1; } }
     public object this[int index] { get { return index == 1 ? ChildItem : null; } }
     public string ProduceXml(bool recursive) { if (recursive) throw new Exception("unexpected recursive traversal"); return Xml; }
+    public ITcSmTreeItem NestedProject {get;set;}
+    public bool IsLoggedIn {get;set;}
 }
 static class Checks
 {
@@ -73,7 +82,9 @@ static class Checks
             string sln = Path.Combine(dir,"Test.sln"), plc = Path.Combine(dir,"PLC.plcproj"), tsproj = Path.Combine(dir,"Owner.tsproj");
             File.WriteAllText(plc, @"<Project><Import Project=""$(MSBuildExtensionsPath)\Beckhoff\TwinCAT\v3.1\TcPlcProject.targets"" /></Project>");
             var events = new EventsFixture(); var platform = new TcConfig { ActiveTargetPlatform = "TwinCAT RT (x64)" };
-            var root = new Tree { ChildItem = new Tree { Xml = "<TreeItem><PlcDef><ProjectPath>" + SecurityElement.Escape(plc) + "</ProjectPath></PlcDef></TreeItem>" } };
+            var nestedPlc = new Tree { IsLoggedIn = true };
+            var root = new Tree { ChildItem = new Tree { NestedProject = nestedPlc,
+                Xml = "<TreeItem><PlcDef><ProjectPath>" + SecurityElement.Escape(plc) + "</ProjectPath></PlcDef></TreeItem>" } };
             var manager = new TcManager { ConfigurationManager = platform, Root = root };
             var owner = new ProjectFixture { FileName = tsproj, Saved = true, Object = manager, UniqueName = "Owner" };
             var projects = new Collection(); projects.Values.Add(owner);
@@ -146,6 +157,17 @@ static class Checks
                 };
                 var association = dispatch("project.association", new { });
                 Require((string)association["status"] == "succeeded" && (string)((Dictionary<string, object>)association["result"])["twinCatProjectFile"] == tsproj, "public factory association with competing global types");
+                var online = dispatch("project.online", new { });
+                var observed = (Dictionary<string, object>)online["result"];
+                Require((string)online["status"] == "succeeded" && (bool)observed["loggedIn"] &&
+                    (string)observed["configuredAmsNetId"] == "1.2.3.4.5.6" && !(bool)observed["runtimeAddressVerified"],
+                    "the selected nested PLC reports login separately from its configured Net ID");
+                nestedPlc.IsLoggedIn = false;
+                Require(!(bool)((Dictionary<string, object>)dispatch("project.online", new { })["result"])["loggedIn"], "logged-out observation");
+                int targetReads = 0;
+                manager.ReadTarget = () => ++targetReads == 1 ? "1.2.3.4.5.6" : "1.2.3.4.5.7";
+                Require((string)dispatch("project.online", new { })["status"] == "unsupported", "changed target yields no observation");
+                Require((string)dispatch("project.online", new { adsPort = 851 })["status"] == "refused", "no target arguments");
                 var description = dispatch("session.describe", new { });
                 var result = (Dictionary<string, object>)description["result"];
                 var capabilities = (Dictionary<string, object>)result["capabilities"];

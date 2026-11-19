@@ -25,11 +25,24 @@ nine build/session/diagnostic tools plus `plc_debug_state` and
 internal `debug.context` request on the authenticated host channel with empty
 arguments, using the same correlated session, operation and context envelope.
 Only the native host can issue a grant for the selected active project chat.
+Require the operator to confirm the ADS address of the PLC already shown
+online in the IDE. Both values are explicit: the canonical AMS Net ID typed by
+the operator must match the fresh configured Net ID and the ADS port must be
+in the TwinCAT 3 PLC range 851–899 supported by this mode. Never supply a default
+port or treat the configured Net ID as proof of the actual login endpoint.
+The dialog identifies the bound project and asks the operator to approve the
+exact symbol names and their disclosure to the Debug chat.
+
 A verified response has status `succeeded` and result
 `{ loggedIn: true, grantId, amsNetId, adsPort, symbols }`. The grant ID is a
-UUID and `symbols` contains at most 32 exact, user-approved symbol names.
-The host must recheck the log-in state and runtime identity for every request.
-An offline, stale, switched or unverified session must return a refusal.
+nonzero UUID. The list contains between one and 32 unique, case-sensitive names,
+at most 160 ASCII characters each. Names support dot-qualified identifiers and
+numeric array indexes. The native host rechecks the project mapping, configured
+Net ID and login before and after approval and before returning any grant.
+Changing the profile, chat, bound project, mapping or configured target revokes
+approval. A logged-out, stale or unverified session must return a refusal.
+The address records operator confirmation. It is not an automated attestation
+of the login's ADS endpoint.
 
 The child checks the grant before opening ADS, before each approved symbol
 read and again before returning the samples. Each read uses the local ADS
@@ -37,6 +50,14 @@ router, disables writes and closes its connection. Responses return at most
 eight timestamped scalar samples and discard readings if the grant changes.
 The host-side runtime observation and consent flow must be implemented before
 this catalog can be adopted.
+
+The in-process `project.online` operation is a read-only observation for the
+native host. It takes no arguments and requires authoritative interop bindings.
+It reuses the exact PLC association and checks `ITcPlcOnline.IsLoggedIn` on
+the selected nested PLC project. The configured Net ID is reported separately,
+when canonical. A changed target or login state during capture is refused.
+The result always carries `runtimeAddressVerified: false`: configuration and
+login observations do not verify the ADS port or authorize a Debug grant.
 
 The published tag `engineering-v0.5.3` pins commit
 `99de69b8cedec780a68a89a631132ea6eb76cf0b`; see
