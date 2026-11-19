@@ -4,14 +4,21 @@ import { pathToFileURL } from "node:url";
 
 const [action, ...args] = process.argv.slice(2);
 if (action === "catalog") {
-  const [repository, output] = args;
+  const [repository, output, profile = "build"] = args;
+  const toolCounts = new Map([["build", 9], ["editor", 15], ["debug", 11]]);
+  if (!toolCounts.has(profile)) throw new Error(`Unknown release catalog profile: ${profile}`);
   const { createLiveEngineeringToolDefinitions } = await import(pathToFileURL(join(repository, "packages/mcp/dist/engineering-live-tools.js")));
   const { zodToJsonSchema } = await import(pathToFileURL(join(repository, "node_modules/zod-to-json-schema/dist/esm/index.js")));
   const definitions = createLiveEngineeringToolDefinitions({
     context: { sessionId: "11111111-1111-4111-8111-111111111111", idePid: 1, ideStartedUtc: "2024-01-01T00:00:00.000Z", solutionFile: "C:\\fixture\\fixture.sln", projectFile: "C:\\fixture\\fixture.plcproj", contextEpoch: "fixture" },
     dispatch: async () => { throw new Error("Catalog generation cannot dispatch operations"); },
-  });
-  if (definitions.length !== 9 || definitions.some((tool) => tool.name.startsWith("plc_source_"))) throw new Error("Unexpected release catalog");
+  }, { enableDevelopmentSourceTools: profile === "editor", enableDebugTools: profile === "debug" });
+  const names = definitions.map((tool) => tool.name);
+  if (new Set(names).size !== toolCounts.get(profile) ||
+      names.filter((name) => name.startsWith("plc_source_")).length !== (profile === "editor" ? 6 : 0) ||
+      names.filter((name) => name.startsWith("plc_debug_")).length !== (profile === "debug" ? 2 : 0)) {
+    throw new Error(`Unexpected release catalog for ${profile}`);
+  }
   const tools = definitions.map(({ name, title, description, inputSchema, annotations }) => {
     const { $schema, ...schema } = zodToJsonSchema(inputSchema, { $refStrategy: "none", target: "jsonSchema7" });
     if (schema.type !== "object") throw new Error(`Invalid input schema for ${name}`);
