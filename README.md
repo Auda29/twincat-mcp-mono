@@ -12,15 +12,19 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.6 PLC mapping fix
+## Engineering 0.5.7 interop invocation fix
 
-Engineering 0.5.6 accepts the unnamespaced `PlcProjectDef/ProjectPath` XML
+Engineering 0.5.7 replaces association/build `Type.InvokeMember` calls with
+the selected interface's property and method metadata. It rejects ambiguous or
+incompatible signatures before invoking and never retries a failed call.
+This addresses the reported native crash in `ITcSmTreeItem.ChildCount` dispatch;
+managed fixtures do not establish live host acceptance.
+
+The release retains 0.5.6's unnamespaced `PlcProjectDef/ProjectPath` XML
 structure reported for TwinCAT 3.1.4024.78 PLC children, alongside `PlcDef`.
 Mixed or duplicate definitions and unverifiable paths still fail closed.
-This corrects the parser used by project association, online observation and
-selective PLC build preflight; it does not establish live host acceptance.
 
-Use the [Engineering 0.5.6 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.6)
+Use the [Engineering 0.5.7 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.7)
 and its own schema 2 integrity receipt. It preserves 0.5.5's factory9 and
 separate Build (9 tools), Editor (15 tools) and Debug (11 tools) catalogs.
 The default Build child has no source tools; Editor source access requires
