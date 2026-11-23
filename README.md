@@ -12,9 +12,17 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.7 interop invocation fix
+## Engineering 0.5.8 host-scoped Debug reads
 
-Engineering 0.5.7 replaces association/build `Type.InvokeMember` calls with
+Engineering 0.5.8 adds nullable `configuredAdsPort` to the bound online project
+observation and lets the trusted native host select `symbolScope: "all"` for
+read-only Debug access, alongside existing explicit symbol allowlists.
+The host owns automatic connection settings and policy; MCP tools cannot issue
+grants. Reads remain scalar-only, at most eight symbols per call, with fresh
+target/grant/scope checks throughout. Configured addresses are not proof of an
+existing login's endpoint. Missing or invalid port evidence stays unknown.
+
+The release retains 0.5.7's replacement of association/build `Type.InvokeMember` calls with
 the selected interface's property and method metadata. It rejects ambiguous or
 incompatible signatures before invoking and never retries a failed call.
 This addresses the reported native crash in `ITcSmTreeItem.ChildCount` dispatch;
@@ -24,9 +32,10 @@ The release retains 0.5.6's unnamespaced `PlcProjectDef/ProjectPath` XML
 structure reported for TwinCAT 3.1.4024.78 PLC children, alongside `PlcDef`.
 Mixed or duplicate definitions and unverifiable paths still fail closed.
 
-Use the [Engineering 0.5.7 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.7)
+Use the [Engineering 0.5.8 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.8)
 and its own schema 2 integrity receipt. It preserves 0.5.5's factory9 and
 separate Build (9 tools), Editor (15 tools) and Debug (11 tools) catalogs.
+The Debug catalog descriptions change; pin its new receipt-bound hash.
 The default Build child has no source tools; Editor source access requires
 the separately selected host profile and scoped callbacks. Ordinary ST editor
 writes remain unsupported. No dependency upgrades or npm publication are included.
