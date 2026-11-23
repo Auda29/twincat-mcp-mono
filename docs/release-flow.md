@@ -1,6 +1,14 @@
 # Release Flow
 
-## Engineering 0.5.5 release preparation
+## Engineering 0.5.6 release preparation
+
+0.5.6 changes the PLC mapping parser to accept `TreeItem/PlcProjectDef/ProjectPath`
+alongside the earlier `TreeItem/PlcDef/ProjectPath`. Both retain strict single
+definition, canonical-path and context recheck requirements. This fixes the
+reported XML mismatch; no live IDE or PLC acceptance is claimed. The release
+keeps the 0.5.5 protocol, native factory, profile boundaries and dependency graph.
+The residual dependency advisories documented for 0.5.5 remain open; the final
+release notes report the assembled artifact's audit rather than assuming it clean.
 
 Build from a clean, committed checkout with `scripts/Build-EngineeringRelease.ps1`.
 The builder uses the locked Node.js dependencies and compiles the x86 .NET
