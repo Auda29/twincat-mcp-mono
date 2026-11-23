@@ -49,6 +49,25 @@ internal static class AssociationChecks
             "<Disabled>false</Disabled><TreeImageData16x14>fixture</TreeImageData16x14><PlcProjectDef><ProjectPath>" + Plc +
             "</ProjectPath><ProjectType>Plc Project</ProjectType><ProjectGUID>{11111111-1111-1111-1111-111111111111}</ProjectGUID></PlcProjectDef></TreeItem>";
         Expect(new Fixture(reported).Resolve().Status == "succeeded", "reported TwinCAT XML shape with sibling metadata is accepted");
+        Expect(new Fixture(reported).Resolve().ConfiguredAdsPort == null, "missing port remains unknown");
+        foreach (var port in new[] { 851, 856, 899 }) {
+            var configured = Project(@"C:\fixture\A.tsproj", Plc);
+            configured.Manager.Children[0].Xml = configured.Manager.Children[0].Xml.Replace("</PlcProjectDef>", "<AdsPort>" + port + "</AdsPort></PlcProjectDef>");
+            Expect(new Fixture(configured).Resolve().ConfiguredAdsPort == port, "canonical configured PLC port observed");
+        }
+        foreach (var fragment in new[] {
+            "<AdsPort>850</AdsPort>", "<AdsPort>900</AdsPort>", "<AdsPort>0851</AdsPort>", "<AdsPort>+851</AdsPort>",
+            "<AdsPort> 851</AdsPort>", "<AdsPort>851.0</AdsPort>", "<AdsPort>999999999999</AdsPort>", "<AdsPort />",
+            "<AdsPort>851</AdsPort><AdsPort>851</AdsPort>", "<AdsPort xmlns='urn:unknown'>851</AdsPort>",
+            "<AdsPort extra='x'>851</AdsPort>", "<AdsPort><Value>851</Value></AdsPort>", "<Other><AdsPort>851</AdsPort></Other>"
+        }) {
+            var configured = Project(@"C:\fixture\A.tsproj", Plc);
+            configured.Manager.Children[0].Xml = configured.Manager.Children[0].Xml.Replace("</PlcProjectDef>", fragment + "</PlcProjectDef>");
+            var portResult = new Fixture(configured).Resolve();
+            Expect(portResult.Status == "succeeded" && portResult.ConfiguredAdsPort == null, "invalid/ambiguous port does not invent endpoint or discard valid mapping");
+        }
+        legacy.Manager.Children[0].Xml = legacy.Manager.Children[0].Xml.Replace("</PlcDef>", "<AdsPort>851</AdsPort></PlcDef>");
+        Expect(new Fixture(legacy).Resolve().ConfiguredAdsPort == null, "legacy definition cannot attest configured port");
 
         foreach (var definition in new[] { "PlcDef", "PlcProjectDef" })
         foreach (var invalid in new[] {

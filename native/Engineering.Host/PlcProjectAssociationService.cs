@@ -28,6 +28,7 @@ namespace TwinCatMcp.Engineering.Host
         public int AssociationCount { get; set; }
         public int? OwningTwinCatPlcChildCount { get; set; }
         public string MappingDigest { get; set; }
+        internal int? ConfiguredAdsPort { get; set; }
         public string ObservedAtUtc { get; set; }
         public string ObservationConsistency { get { return Status == "succeeded" ? "selectedMappingRechecked" : null; } }
         public string BuildScopeStatus { get { return "unknown"; } }
@@ -57,7 +58,7 @@ namespace TwinCatMcp.Engineering.Host
         { if (access == null) throw new ArgumentNullException("access"); this.access = access; }
 
         internal PlcProjectAssociationResult Resolve(string solutionFile, string projectFile, Action revalidateContext,
-            Action<object, object, string> observeSelectedPlc = null)
+            Action<object, object, string, int?> observeSelectedPlc = null)
         {
             if (revalidateContext == null || !CanonicalFile(solutionFile, ".sln") || !CanonicalFile(projectFile, ".plcproj")) Refuse("invalid_association_target");
             try
@@ -74,6 +75,7 @@ namespace TwinCatMcp.Engineering.Host
                 int matchedChildIndex = 0;
                 string matchedXml = null;
                 string matchedPath = null;
+                int? matchedAdsPort = null;
                 var projectPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 int plcBudget = 512;
                 foreach (var project in projects)
@@ -134,12 +136,16 @@ namespace TwinCatMcp.Engineering.Host
                     if (Number(Get(currentRoot, "TCatSysManagerLib.ITcSmTreeItem", "ChildCount", revalidateContext)) != matchedOwnerPlcCount) Conflict("plc_association_changed");
                     var currentChild = Get(currentRoot, "TCatSysManagerLib.ITcSmTreeItem", "Child", revalidateContext, matchedChildIndex);
                     var currentXml = Text(Call(currentChild, "TCatSysManagerLib.ITcSmTreeItem", "ProduceXml", revalidateContext, false));
-                    if (!string.Equals(currentXml, matchedXml, StringComparison.Ordinal) || !string.Equals(ProjectPath(currentXml), matchedPath, StringComparison.Ordinal)) Conflict("plc_association_changed");
+                    int? configuredAdsPort;
+                    var currentPath = ProjectPath(currentXml, out configuredAdsPort);
+                    if (!string.Equals(currentXml, matchedXml, StringComparison.Ordinal) || !string.Equals(currentPath, matchedPath, StringComparison.Ordinal)) Conflict("plc_association_changed");
+                    matchedAdsPort = configuredAdsPort;
                     if (observeSelectedPlc != null)
                     {
                         Validate(revalidateContext);
-                        observeSelectedPlc(currentManager, currentChild, matchedTwinCatFile);
+                        observeSelectedPlc(currentManager, currentChild, matchedTwinCatFile, configuredAdsPort);
                         Validate(revalidateContext);
+                        if (!string.Equals(Text(Call(currentChild, "TCatSysManagerLib.ITcSmTreeItem", "ProduceXml", revalidateContext, false)), currentXml, StringComparison.Ordinal)) Conflict("plc_association_changed");
                     }
                     }
                     catch (PlcProjectAssociationException error)
@@ -162,6 +168,7 @@ namespace TwinCatMcp.Engineering.Host
                     // BuildProject scope have not been enumerated or verified.
                     OwningTwinCatPlcChildCount = matches == 1 ? matchedOwnerPlcCount : null,
                     MappingDigest = matches == 1 ? Digest(matchedXml) : null,
+                    ConfiguredAdsPort = matches == 1 ? matchedAdsPort : null,
                     ObservedAtUtc = matches == 1 ? DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture) : null
                 };
             }
@@ -223,7 +230,10 @@ namespace TwinCatMcp.Engineering.Host
             catch { return false; }
         }
         private static string ProjectPath(string xml)
+        { int? ignored; return ProjectPath(xml, out ignored); }
+        private static string ProjectPath(string xml, out int? configuredAdsPort)
         {
+            configuredAdsPort = null;
             if (xml == null || xml.Length > MaxXml) Refuse("project_mapping_xml_limit");
             XDocument document;
             using (var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXml }))
@@ -238,6 +248,15 @@ namespace TwinCatMcp.Engineering.Host
                 paths[0].Parent == null || (paths[0].Parent.Name != "PlcProjectDef" && paths[0].Parent.Name != "PlcDef") ||
                 paths[0].Parent.Parent != document.Root || definitions.Length != 1 ||
                 !CanonicalFile(paths[0].Value, ".plcproj")) Unsupported("unverified_plc_project_mapping");
+            // Configuration evidence only, never proof of the active login's
+            // endpoint. Ambiguous/malformed/legacy ports remain unknown.
+            var ports = document.Descendants().Where(e => e.Name.LocalName == "AdsPort").ToArray();
+            int port;
+            if (paths[0].Parent.Name == "PlcProjectDef" && ports.Length == 1 &&
+                ports[0].Name == "AdsPort" && ports[0].Parent == paths[0].Parent &&
+                !ports[0].HasElements && !ports[0].HasAttributes &&
+                int.TryParse(ports[0].Value, NumberStyles.None, CultureInfo.InvariantCulture, out port) &&
+                port >= 851 && port <= 899 && ports[0].Value == port.ToString(CultureInfo.InvariantCulture)) configuredAdsPort = port;
             return paths[0].Value;
         }
         private static void Refuse(string code) { throw new PlcProjectAssociationException("refused", code); }
