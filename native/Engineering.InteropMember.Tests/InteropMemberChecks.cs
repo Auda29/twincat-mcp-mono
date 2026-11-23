@@ -22,6 +22,7 @@ namespace InteropMemberChecks
         string WriteOnly { set; }
         string Generic<T>(T value);
         string RefValue(ref int value);
+        string Optional(string value = "default");
         string Explode();
     }
     interface ITagA { }
@@ -42,11 +43,22 @@ namespace InteropMemberChecks
         string ISelected.WriteOnly { set { Writes++; } }
         string ISelected.Generic<T>(T value) { Calls++; return "generic"; }
         string ISelected.RefValue(ref int value) { Calls++; value++; return "ref"; }
+        string ISelected.Optional(string value) { Calls++; return "optional:" + value; }
         string ISelected.Explode() { Explosions++; throw Error; }
         public string Name { get { throw new Exception("concrete decoy getter"); } }
         public string Describe(string value) { throw new Exception("concrete decoy method"); }
         public string ConcreteOnly { get { throw new Exception("concrete-only getter"); } }
         public string ConcreteCall() { throw new Exception("concrete-only method"); }
+    }
+
+    interface IPropertyLeft { string Shared { get; } }
+    interface IPropertyRight { string Shared { get; } }
+    interface IPropertyConflict : IPropertyLeft, IPropertyRight { }
+    sealed class PropertyConflict : IPropertyConflict
+    {
+        public int Reads;
+        string IPropertyLeft.Shared { get { Reads++; return "left"; } }
+        string IPropertyRight.Shared { get { Reads++; return "right"; } }
     }
 
     static class Program
@@ -80,6 +92,7 @@ namespace InteropMemberChecks
                 Equal("string:x", Call(f, "Choice", "x"), "string overload");
                 Equal("int:4", Call(f, "Choice", 4), "integer overload");
                 Equal("read", Get(f, "ReadWrite"), "readable property");
+                Equal("optional:provided", Call(f, "Optional", "provided"), "explicit optional argument");
                 Throws<MissingMemberException>(() => Get(f, "ConcreteOnly"), "concrete-only property");
                 Throws<MissingMemberException>(() => Call(f, "ConcreteCall"), "concrete-only method");
                 Throws<MissingMemberException>(() => Get(f, "name"), "case-sensitive name");
@@ -93,12 +106,16 @@ namespace InteropMemberChecks
                 Throws<MissingMemberException>(() => Get(f, "Item", new object[] { null }), "null value type index");
                 Throws<MissingMemberException>(() => Call(f, "Generic", "x"), "generic method");
                 Throws<MissingMemberException>(() => Call(f, "RefValue", 1), "byref method");
+                Throws<MissingMemberException>(() => Call(f, "Optional"), "no optional argument filling");
                 Equal(beforeCalls, f.Calls, "rejected calls do not invoke");
                 Equal(beforeReads, f.Reads, "rejected getters do not invoke");
                 Equal(0, f.Writes, "getters never invoke setters");
                 var failure = Throws<TargetInvocationException>(() => Call(f, "Explode"), "target exception");
                 Equal(true, object.ReferenceEquals(f.Error, failure.InnerException), "original exception propagated");
                 Equal(1, f.Explosions, "failing method invoked once");
+                var properties = new PropertyConflict();
+                Throws<AmbiguousMatchException>(() => InteropMemberAccess.Get(typeof(IPropertyConflict), properties, "Shared"), "inherited property ambiguity");
+                Equal(0, properties.Reads, "ambiguous property is never invoked");
                 Console.WriteLine("Passed " + checks + " interop member checks.");
                 return 0;
             }
