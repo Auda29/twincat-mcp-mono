@@ -1,9 +1,11 @@
 using System;
 namespace EnvDTE {
- public interface DTE { Events Events {get;} Solution Solution {get;} Documents Documents {get;} }
+ public interface DTE : _DTE { }
+ public interface _DTE { Events Events {get;} Solution Solution {get;} Documents Documents {get;} }
  public interface Events { object BuildEvents {get;} }
  public interface _dispBuildEvents_Event { event Action<string,string> OnBuildBegin; event Action<string,string,string> OnBuildProjConfigBegin; event Action<string,string,string,string,bool> OnBuildProjConfigDone; event Action<string,string> OnBuildDone; }
- public interface Solution { string FullName {get;} bool Saved {get;} Projects Projects {get;} SolutionBuild SolutionBuild {get;} }
+ public interface Solution : _Solution { }
+ public interface _Solution { string FullName {get;} bool Saved {get;} Projects Projects {get;} SolutionBuild SolutionBuild {get;} }
  public interface Projects { int Count {get;} object Item(object index); }
  public interface Project { string FileName {get;} string Kind {get;} object Object {get;} object ProjectItems {get;} bool Saved {get;} string UniqueName {get;} }
  public interface ProjectItems { int Count {get;} object Item(object index); }
