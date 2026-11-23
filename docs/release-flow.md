@@ -1,8 +1,17 @@
 # Release Flow
 
-## Engineering 0.5.7 release preparation
+## Engineering 0.5.8 release preparation
 
-0.5.7 invokes association/build members through the selected interface's
+0.5.8 adds configured-port evidence and trusted host all-symbol Debug scope.
+`project.online.configuredAdsPort` is an integer in 851–899 or null from the
+validated `PlcProjectDef` XML. `runtimeAddressVerified` remains false.
+The host may issue `symbolScope: "all"` without a symbols field, or retain the
+explicit allowlist contract. This is host policy, not model-issued access.
+Read-only ADS, scalar bounds, max eight symbols and target/grant rechecks remain.
+The Debug catalog has updated descriptions and a new hash; tool counts and
+Build/Editor definitions remain unchanged. Use the new receipt for adoption.
+
+The release retains 0.5.7's invocation of association/build members through the selected interface's
 `PropertyInfo.GetValue` and `MethodInfo.Invoke`, replacing `Type.InvokeMember`.
 Member selection requires one compatible signature; ambiguous or mismatched
 calls fail before invocation and no failed invocation is retried. This follows
