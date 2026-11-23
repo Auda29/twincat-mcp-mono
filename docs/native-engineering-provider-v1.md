@@ -25,24 +25,28 @@ nine build/session/diagnostic tools plus `plc_debug_state` and
 internal `debug.context` request on the authenticated host channel with empty
 arguments, using the same correlated session, operation and context envelope.
 Only the native host can issue a grant for the selected active project chat.
-Require the operator to confirm the ADS address of the PLC already shown
-online in the IDE. Both values are explicit: the canonical AMS Net ID typed by
-the operator must match the fresh configured Net ID and the ADS port must be
-in the TwinCAT 3 PLC range 851–899 supported by this mode. Never supply a default
-port or treat the configured Net ID as proof of the actual login endpoint.
-The dialog identifies the bound project and asks the operator to approve the
-exact symbol names and their disclosure to the Debug chat.
+The native host owns Debug access policy, including automatic read-only access
+when enabled in its settings. The child never issues a grant or supplies a
+default address/port. The host must recheck the bound online project and its
+target on every context request. Configured address evidence must not be
+labelled proof of the actual endpoint of an existing login.
 
 A verified response has status `succeeded` and result
-`{ loggedIn: true, grantId, amsNetId, adsPort, symbols }`. The grant ID is a
+`{ loggedIn: true, grantId, amsNetId, adsPort, symbols }` for a legacy allowlist,
+optionally with `symbolScope: "allowlist"`. Alternatively the host may return
+`{ loggedIn: true, grantId, amsNetId, adsPort, symbolScope: "all" }`, with no
+`symbols` field, to allow any valid requested symbol name. Mixed or unknown
+scope claims fail closed. Port must be an integer in 851–899. The grant ID is a
 nonzero UUID. The list contains between one and 32 unique, case-sensitive names,
 at most 160 ASCII characters each. Names support dot-qualified identifiers and
 numeric array indexes. The native host rechecks the project mapping, configured
-Net ID and login before and after approval and before returning any grant.
+Net ID, configured port and login before issuing or returning any grant.
 Changing the profile, chat, bound project, mapping or configured target revokes
 approval. A logged-out, stale or unverified session must return a refusal.
-The address records operator confirmation. It is not an automated attestation
-of the login's ADS endpoint.
+The grant records host policy and is not an automated attestation of the
+login's ADS endpoint. A grant's scope, identity or endpoint change discards
+in-flight read results. `plc_debug_state` reports `symbolScope: "all"` for that
+scope, or the allowlisted `symbols` array for compatibility.
 
 The child checks the grant before opening ADS, before each approved symbol
 read and again before returning the samples. Each read uses the local ADS
@@ -55,7 +59,11 @@ The in-process `project.online` operation is a read-only observation for the
 native host. It takes no arguments and requires authoritative interop bindings.
 It reuses the exact PLC association and checks `ITcPlcOnline.IsLoggedIn` on
 the selected nested PLC project. The configured Net ID is reported separately,
-when canonical. A changed target or login state during capture is refused.
+when canonical. `configuredAdsPort` is an integer in 851–899 or null, read only
+from one attribute-free, plain-text direct `PlcProjectDef/AdsPort` in the exact
+validated mapping XML. Missing, malformed, ambiguous, namespaced or legacy
+`PlcDef` port evidence stays null. No port is guessed. The XML is rechecked
+after login observation as well. A changed mapping, target or login state during capture is refused.
 The result always carries `runtimeAddressVerified: false`: configuration and
 login observations do not verify the ADS port or authorize a Debug grant.
 

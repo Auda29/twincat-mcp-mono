@@ -5,13 +5,17 @@ import type { McpToolDefinition } from "./index.js";
 const symbolName = z.string().max(160).regex(/^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*|\[\d{1,6}\])*(?![\s\S])/);
 const netId = z.string().max(23).regex(/^(?:0|[1-9]\d{0,2})(?:\.(?:0|[1-9]\d{0,2})){5}(?![\s\S])/)
   .refine(value => value !== "0.0.0.0.0.0" && value.split(".").every(octet => Number(octet) <= 255));
-const targetSchema = z.object({
+const targetFields = {
   loggedIn: z.literal(true),
   grantId: z.string().uuid().refine(value => value !== "00000000-0000-0000-0000-000000000000"),
   amsNetId: netId,
   adsPort: z.number().int().min(851).max(899),
-  symbols: z.array(symbolName).min(1).max(32).refine(names => new Set(names).size === names.length),
-}).strict();
+};
+const targetSchema = z.union([
+  z.object({ ...targetFields, symbolScope: z.literal("allowlist").optional(),
+    symbols: z.array(symbolName).min(1).max(32).refine(names => new Set(names).size === names.length) }).strict(),
+  z.object({ ...targetFields, symbolScope: z.literal("all") }).strict(),
+]);
 const readInput = z.object({
   symbols: z.array(symbolName).min(1).max(8).refine(names => new Set(names).size === names.length),
 }).strict();
@@ -55,16 +59,19 @@ export function createDebugLiveTools(invoke: InvokeHost, openReader: OpenReader 
   return [
     {
       name: "plc_debug_state", title: "Bound PLC Debug State", inputSchema: emptyInput, annotations: readOnly,
-      description: "Check whether the native Assistant confirms an approved Debug grant for its already logged-in PLC project.",
+      description: "Check whether the native Assistant confirms an approved Debug grant and its symbol scope for its already logged-in PLC project.",
       async execute(input) {
         emptyInput.parse(input);
         const target = await onlineTarget();
-        return target ? { status: "online", symbols: target.symbols } : { status: "online_session_not_verified" };
+        return target ? target.symbolScope === "all"
+          ? { status: "online", symbolScope: "all" }
+          : { status: "online", symbols: target.symbols }
+          : { status: "online_session_not_verified" };
       },
     },
     {
       name: "plc_debug_read", title: "Read Approved Live PLC Values", inputSchema: readInput, annotations: readOnly,
-      description: "Read up to eight explicitly approved symbols from the bound online PLC. Values are observed individually, with a timestamp for each sample.",
+      description: "Read up to eight symbols permitted by the native Assistant's Debug grant from the bound online PLC. Values are observed individually, with a timestamp for each sample.",
       async execute(input) {
         const { symbols } = readInput.parse(input);
         if (reading) return { status: "busy" };
@@ -73,7 +80,7 @@ export function createDebugLiveTools(invoke: InvokeHost, openReader: OpenReader 
         try {
           const target = await onlineTarget();
           if (!target) return { status: "online_session_not_verified" };
-          if (symbols.some(name => !target.symbols.includes(name))) return { status: "symbol_not_approved" };
+          if (target.symbolScope !== "all" && symbols.some(name => !target.symbols.includes(name))) return { status: "symbol_not_approved" };
           const identity = JSON.stringify(target);
           reader = openReader(target);
           const values = [];

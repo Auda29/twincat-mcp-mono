@@ -342,9 +342,9 @@ namespace TwinCatMcp.Engineering.Host
                     if (!interopTypes.IsAuthoritative) return Failure(json, session, operation, "unsupported", "online_interop_unavailable");
                     PlcOnlineObservation observation = null;
                     var association = new PlcProjectAssociationService(dte, interopTypes).Resolve(current.SolutionFile, current.ProjectFile,
-                        () => ValidateContext(expected, currentContext(), session), (manager, plc, _) =>
+                        () => ValidateContext(expected, currentContext(), session), (manager, plc, _, configuredPort) =>
                         {
-                            try { observation = PlcOnlineObservation.Capture(interopTypes, manager, plc); }
+                            try { observation = PlcOnlineObservation.Capture(interopTypes, manager, plc, configuredPort); }
                             catch { /* No trustworthy observation is available. */ }
                         });
                     if (association.Status != "succeeded") return Failure(json, session, operation, association.Status, association.ErrorCode);
@@ -352,6 +352,7 @@ namespace TwinCatMcp.Engineering.Host
                     return json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"),
                         status = "succeeded", provenance = Provenance(null),
                         result = new { loggedIn = observation.LoggedIn, configuredAmsNetId = observation.ConfiguredAmsNetId,
+                            configuredAdsPort = observation.ConfiguredAdsPort,
                             runtimeAddressVerified = false, mappingDigest = association.MappingDigest, observedAtUtc = association.ObservedAtUtc } });
                 }
                 if (name == "project.association")

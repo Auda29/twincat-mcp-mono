@@ -162,6 +162,15 @@ static class Checks
                 Require((string)online["status"] == "succeeded" && (bool)observed["loggedIn"] &&
                     (string)observed["configuredAmsNetId"] == "1.2.3.4.5.6" && !(bool)observed["runtimeAddressVerified"],
                     "the selected nested PLC reports login separately from its configured Net ID");
+                Require(observed.ContainsKey("configuredAdsPort") && observed["configuredAdsPort"] == null, "missing configured port is explicit null");
+                var plcTree = (Tree)root.ChildItem;
+                var originalXml = plcTree.Xml;
+                plcTree.Xml = originalXml.Replace("</PlcProjectDef>", "<AdsPort>856</AdsPort></PlcProjectDef>");
+                observed = (Dictionary<string, object>)dispatch("project.online", new { })["result"];
+                Require((int)observed["configuredAdsPort"] == 856 && !(bool)observed["runtimeAddressVerified"], "configured port does not attest actual login endpoint");
+                manager.ReadTarget = () => { plcTree.Xml = originalXml; return "1.2.3.4.5.6"; };
+                Require((string)dispatch("project.online", new { })["status"] == "conflict", "mapping/port change during login observation discards result");
+                manager.ReadTarget = () => "1.2.3.4.5.6";
                 nestedPlc.IsLoggedIn = false;
                 Require(!(bool)((Dictionary<string, object>)dispatch("project.online", new { })["result"])["loggedIn"], "logged-out observation");
                 int targetReads = 0;

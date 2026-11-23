@@ -8,13 +8,15 @@ namespace TwinCatMcp.Engineering.Host
     {
         internal bool LoggedIn { get; }
         internal string ConfiguredAmsNetId { get; }
-        internal PlcOnlineObservation(bool loggedIn, string configuredAmsNetId)
+        internal int? ConfiguredAdsPort { get; }
+        internal PlcOnlineObservation(bool loggedIn, string configuredAmsNetId, int? configuredAdsPort)
         {
             LoggedIn = loggedIn;
             ConfiguredAmsNetId = configuredAmsNetId;
+            ConfiguredAdsPort = configuredAdsPort;
         }
 
-        internal static PlcOnlineObservation Capture(EngineeringInteropTypes types, object manager, object plcRoot)
+        internal static PlcOnlineObservation Capture(EngineeringInteropTypes types, object manager, object plcRoot, int? configuredAdsPort)
         {
             if (!types.IsAuthoritative) return null;
             var assembly = types.Resolve("TCatSysManagerLib.ITcSysManager").Assembly;
@@ -37,7 +39,7 @@ namespace TwinCatMcp.Engineering.Host
             if (firstTarget != secondTarget || firstLogin != secondLogin) return null;
             // GetTargetNetId observes the selected configuration, not the ADS
             // port or the actual target of a previously established login.
-            return new PlcOnlineObservation(secondLogin, ValidNetId(secondTarget) ? secondTarget : null);
+            return new PlcOnlineObservation(secondLogin, ValidNetId(secondTarget) ? secondTarget : null, configuredAdsPort);
         }
 
         private static Type Interface(Assembly assembly, string name)
