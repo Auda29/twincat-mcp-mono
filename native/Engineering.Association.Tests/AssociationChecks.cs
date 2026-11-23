@@ -20,7 +20,7 @@ internal static class AssociationChecks
     private static Node Project(string tsproj, params string[] paths)
     {
         return new Node { File = tsproj, Manager = new Node {
-            Children = paths.Select(path => new Node { Xml = "<TreeItem><PlcDef><ProjectPath>" + path + "</ProjectPath></PlcDef></TreeItem>" }).ToList()
+            Children = paths.Select(path => new Node { Xml = "<TreeItem><PlcProjectDef><ProjectPath>" + path + "</ProjectPath></PlcProjectDef></TreeItem>" }).ToList()
         } };
     }
 
@@ -39,6 +39,41 @@ internal static class AssociationChecks
         Expect(result.MappingDigest == expectedDigest && DateTime.TryParse(result.ObservedAtUtc, null, System.Globalization.DateTimeStyles.RoundtripKind, out observed) && observed.Kind == DateTimeKind.Utc, "digest covers exact UTF8 mapping and observation time is UTC");
         Expect(fixture.ValidationCalls == fixture.AccessCalls + 1, "all automation reads revalidate context");
         Expect(fixture.Calls.All(call => call == "Item" || call == "LookupTreeItem" || call == "ProduceXml"), "only mapping methods invoked");
+
+        var legacy = Project(@"C:\fixture\A.tsproj", Plc);
+        legacy.Manager.Children[0].Xml = "<TreeItem><PlcDef><ProjectPath>" + Plc + "</ProjectPath></PlcDef></TreeItem>";
+        Expect(new Fixture(legacy).Resolve().Status == "succeeded", "earlier PlcDef shape remains supported");
+        var reported = Project(@"C:\fixture\A.tsproj", Plc);
+        reported.Manager.Children[0].Xml = "<?xml version='1.0'?><TreeItem><ItemName>PLC_Probe</ItemName><PathName>TIPC^PLC_Probe</PathName>" +
+            "<ItemType>56</ItemType><ItemId>1</ItemId><ItemSubTypeName>Plc Project</ItemSubTypeName><ChildCount>1</ChildCount>" +
+            "<Disabled>false</Disabled><TreeImageData16x14>fixture</TreeImageData16x14><PlcProjectDef><ProjectPath>" + Plc +
+            "</ProjectPath><ProjectType>Plc Project</ProjectType><ProjectGUID>{11111111-1111-1111-1111-111111111111}</ProjectGUID></PlcProjectDef></TreeItem>";
+        Expect(new Fixture(reported).Resolve().Status == "succeeded", "reported TwinCAT XML shape with sibling metadata is accepted");
+
+        foreach (var definition in new[] { "PlcDef", "PlcProjectDef" })
+        foreach (var invalid in new[] {
+            "<TreeItem><" + definition + "><ProjectPath extra='x'>" + Plc + "</ProjectPath></" + definition + "></TreeItem>",
+            "<TreeItem><" + definition + "><ProjectPath><Text>" + Plc + "</Text></ProjectPath></" + definition + "></TreeItem>",
+            "<TreeItem><" + definition + "><ProjectPath>" + Plc + "</ProjectPath></" + definition + "><" + definition + " /></TreeItem>",
+            "<TreeItem><" + definition + "><ProjectPath>" + Plc + "</ProjectPath><ProjectPath>" + Plc + "</ProjectPath></" + definition + "></TreeItem>",
+            "<TreeItem><" + definition + " xmlns='urn:unverified'><ProjectPath>" + Plc + "</ProjectPath></" + definition + "></TreeItem>",
+            "<TreeItem><Wrapper><" + definition + "><ProjectPath>" + Plc + "</ProjectPath></" + definition + "></Wrapper></TreeItem>",
+            "<TreeItem><" + definition + "><ProjectPath>" + Plc + "</ProjectPath></" + definition + "><Unrelated><ProjectPath xmlns='urn:unverified'>" + Plc + "</ProjectPath></Unrelated></TreeItem>"
+        }) {
+            var invalidProject = Project(@"C:\fixture\A.tsproj", Plc);
+            invalidProject.Manager.Children[0].Xml = invalid;
+            Throws(() => new Fixture(invalidProject).Resolve(), "unsupported", definition + " malformed/ambiguous shape refused");
+        }
+        foreach (var definitions in new[] {
+            "<PlcProjectDef><ProjectPath>" + Plc + "</ProjectPath></PlcProjectDef><PlcDef />",
+            "<PlcDef><ProjectPath>" + Plc + "</ProjectPath></PlcDef><PlcProjectDef />",
+            "<PlcProjectDef><ProjectPath>" + Plc + "</ProjectPath></PlcProjectDef><PlcDef xmlns='urn:unverified' />",
+            "<PlcProjectDef><ProjectPath>" + Plc + "</ProjectPath></PlcProjectDef><PlcDef><ProjectPath>" + Plc + "</ProjectPath></PlcDef>"
+        }) {
+            var mixed = Project(@"C:\fixture\A.tsproj", Plc);
+            mixed.Manager.Children[0].Xml = "<TreeItem>" + definitions + "</TreeItem>";
+            Throws(() => new Fixture(mixed).Resolve(), "unsupported", "mixed definitions never selected");
+        }
 
         fixture = new Fixture(Project(@"C:\fixture\A.tsproj", Plc.ToUpperInvariant()));
         Expect(fixture.Resolve().AssociationCount == 1, "Windows path identity case insensitive");
@@ -105,8 +140,11 @@ internal static class AssociationChecks
         fixture = new Fixture(Project(@"C:\fixture\A.tsproj", Plc)) { InvalidateAfter = 12 };
         Throws(() => fixture.Resolve(), "conflict", "mid-read context change refused");
         var changing = Project(@"C:\fixture\A.tsproj", Plc);
-        fixture = new Fixture(changing) { BeforeSecondXml = () => changing.Manager.Children[0].Xml = "<TreeItem><PlcDef><ProjectPath>" + Plc + "</ProjectPath></PlcDef> </TreeItem>" };
+        fixture = new Fixture(changing) { BeforeSecondXml = () => changing.Manager.Children[0].Xml = "<TreeItem><PlcProjectDef><ProjectPath>" + Plc + "</ProjectPath></PlcProjectDef> </TreeItem>" };
         Throws(() => fixture.Resolve(), "conflict", "XML-only mapping change refused");
+        changing = Project(@"C:\fixture\A.tsproj", Plc);
+        fixture = new Fixture(changing) { BeforeSecondXml = () => changing.Manager.Children[0].Xml = "<TreeItem><PlcDef><ProjectPath>" + Plc + "</ProjectPath></PlcDef></TreeItem>" };
+        Throws(() => fixture.Resolve(), "conflict", "definition shape change with identical path refused");
         changing = Project(@"C:\fixture\A.tsproj", Plc);
         fixture = new Fixture(changing) { BeforeSecondXml = () => changing.Manager.Children[0].Xml = "<TreeItem><PlcDef><ProjectPath>C:\\other\\a.plcproj</ProjectPath></PlcDef></TreeItem>" };
         Throws(() => fixture.Resolve(), "conflict", "ProjectPath change refused");

@@ -229,10 +229,14 @@ namespace TwinCatMcp.Engineering.Host
             using (var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXml }))
                 document = XDocument.Load(reader);
             var paths = document.Descendants().Where(e => e.Name.LocalName == "ProjectPath").ToArray();
+            // TwinCAT 3.1 PLC project children use PlcProjectDef. Retain the
+            // earlier PlcDef shape, but never choose between two definitions.
+            var definitions = document.Root == null ? new XElement[0] : document.Root.Elements()
+                .Where(e => e.Name.LocalName == "PlcProjectDef" || e.Name.LocalName == "PlcDef").ToArray();
             if (document.Root == null || document.Root.Name != "TreeItem" || paths.Length != 1 ||
                 paths[0].Name != "ProjectPath" || paths[0].HasElements || paths[0].HasAttributes ||
-                paths[0].Parent == null || paths[0].Parent.Name != "PlcDef" ||
-                paths[0].Parent.Parent != document.Root || document.Root.Elements("PlcDef").Count() != 1 ||
+                paths[0].Parent == null || (paths[0].Parent.Name != "PlcProjectDef" && paths[0].Parent.Name != "PlcDef") ||
+                paths[0].Parent.Parent != document.Root || definitions.Length != 1 ||
                 !CanonicalFile(paths[0].Value, ".plcproj")) Unsupported("unverified_plc_project_mapping");
             return paths[0].Value;
         }

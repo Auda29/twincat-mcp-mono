@@ -84,7 +84,7 @@ static class Checks
             var events = new EventsFixture(); var platform = new TcConfig { ActiveTargetPlatform = "TwinCAT RT (x64)" };
             var nestedPlc = new Tree { IsLoggedIn = true };
             var root = new Tree { ChildItem = new Tree { NestedProject = nestedPlc,
-                Xml = "<TreeItem><PlcDef><ProjectPath>" + SecurityElement.Escape(plc) + "</ProjectPath></PlcDef></TreeItem>" } };
+                Xml = "<TreeItem><ItemType>56</ItemType><ItemSubTypeName>Plc Project</ItemSubTypeName><PlcProjectDef><ProjectPath>" + SecurityElement.Escape(plc) + "</ProjectPath><ProjectType>Plc Project</ProjectType></PlcProjectDef></TreeItem>" } };
             var manager = new TcManager { ConfigurationManager = platform, Root = root };
             var owner = new ProjectFixture { FileName = tsproj, Saved = true, Object = manager, UniqueName = "Owner" };
             var projects = new Collection(); projects.Values.Add(owner);
