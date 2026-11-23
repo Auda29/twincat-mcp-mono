@@ -1,8 +1,15 @@
 # Release Flow
 
-## Engineering 0.5.6 release preparation
+## Engineering 0.5.7 release preparation
 
-0.5.6 changes the PLC mapping parser to accept `TreeItem/PlcProjectDef/ProjectPath`
+0.5.7 invokes association/build members through the selected interface's
+`PropertyInfo.GetValue` and `MethodInfo.Invoke`, replacing `Type.InvokeMember`.
+Member selection requires one compatible signature; ambiguous or mismatched
+calls fail before invocation and no failed invocation is retried. This follows
+the reported live `ITcSmTreeItem.ChildCount` dispatch access violation. Local
+managed fixtures validate selection behavior, not live COM acceptance.
+
+The release retains 0.5.6's PLC mapping parser support for `TreeItem/PlcProjectDef/ProjectPath`
 alongside the earlier `TreeItem/PlcDef/ProjectPath`. Both retain strict single
 definition, canonical-path and context recheck requirements. This fixes the
 reported XML mismatch; no live IDE or PLC acceptance is claimed. The release
