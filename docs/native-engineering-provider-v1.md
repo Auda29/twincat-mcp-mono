@@ -235,6 +235,16 @@ Unsubscription retains the exact selected event and delegate. Legacy discovery
 remains unique-only and no longer selects the first EnvDTE build assembly;
 conflicting family views refuse rather than mixing adapters.
 
+Association and build access invoke the selected interface's `PropertyInfo`
+getter or `MethodInfo` directly, including inherited interface members and
+indexed getters. They do not use `Type.InvokeMember` dispatch or discover
+members on the concrete target. A member must have exactly one compatible
+signature with the supplied argument count and types; ambiguous overloads,
+implicit conversions, omitted optional arguments, generic and by-reference
+calls are refused before invocation. A failed invocation is never retried.
+Managed metadata fixtures validate these selection rules; they do not establish
+live COM compatibility or reproduce the reported native access violation.
+
 The host, not the model or JSON request, authenticates the provenance of its
 compiled references. Before candidate adoption it needs actual runtime Type
 assembly identities and MVIDs, not only installed-file/ReflectionOnly evidence.

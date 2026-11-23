@@ -79,26 +79,14 @@ namespace TwinCatMcp.Engineering.Host
         {
             var contract = interopTypes.Resolve("EnvDTE." + type);
             if (instance == null || !contract.IsInstanceOfType(instance)) Unsupported();
-            var declaring = DeclaringType(contract, name);
-            return declaring.InvokeMember(name, BindingFlags.GetProperty, null, instance, new object[0], CultureInfo.InvariantCulture);
+            return InteropMemberAccess.Get(contract, instance, name);
         }
 
         private object Call(object instance, string type, string name, params object[] arguments)
         {
             var contract = interopTypes.Resolve("EnvDTE." + type);
             if (instance == null || !contract.IsInstanceOfType(instance)) Unsupported();
-            var declaring = DeclaringType(contract, name);
-            return declaring.InvokeMember(name, BindingFlags.InvokeMethod, null, instance, arguments, CultureInfo.InvariantCulture);
-        }
-
-        private static Type DeclaringType(Type type, string member)
-        {
-            // Reflection does not include inherited interface members. In EnvDTE
-            // 8, DTE and Solution are empty interfaces inheriting _DTE/_Solution.
-            if (type.GetMember(member, BindingFlags.Public | BindingFlags.Instance).Length != 0) return type;
-            foreach (var parent in type.GetInterfaces())
-                if (parent.GetMember(member, BindingFlags.Public | BindingFlags.Instance).Length != 0) return parent;
-            throw new MissingMemberException();
+            return InteropMemberAccess.Call(contract, instance, name, arguments);
         }
 
         private IEnumerable<object> Items(object collection, string type, int maximum)
@@ -204,7 +192,7 @@ namespace TwinCatMcp.Engineering.Host
         {
             var type = interopTypes.Resolve("EnvDTE80.SolutionConfiguration2");
             if (configuration == null || !type.IsInstanceOfType(configuration)) throw new NativeBuildException("unsupported", "solution_platform_evidence_unavailable");
-            return (string)DeclaringType(type, "PlatformName").InvokeMember("PlatformName", BindingFlags.GetProperty, null, configuration, new object[0], CultureInfo.InvariantCulture);
+            return (string)InteropMemberAccess.Get(type, configuration, "PlatformName");
         }
 
         private object TcGet(object instance, string typeName, string member)
@@ -214,7 +202,7 @@ namespace TwinCatMcp.Engineering.Host
             if (!interopTypes.IsAuthoritative && assemblyName != "TCatSysManagerLib" && assemblyName != "Interop.TCatSysManagerLib")
                 throw new NativeBuildException("unsupported", "build_platform_evidence_unavailable");
             if (instance == null || !type.IsInstanceOfType(instance)) throw new NativeBuildException("unsupported", "build_platform_evidence_unavailable");
-            return DeclaringType(type, member).InvokeMember(member, BindingFlags.GetProperty, null, instance, new object[0], CultureInfo.InvariantCulture);
+            return InteropMemberAccess.Get(type, instance, member);
         }
 
         private void Find(object project, string file, List<object> matches, ref int budget, int depth)

@@ -338,6 +338,49 @@ namespace TwinCatMcp.Engineering.Host
         }
     }
 
+    // Invoke the selected interface metadata directly. Type.InvokeMember may
+    // choose IDispatch on an RCW instead of the required interface accessor.
+    // No instance-member discovery, coercion, optional-argument filling or retry.
+    internal static class InteropMemberAccess
+    {
+        private const BindingFlags Members = BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly;
+        private static IEnumerable<Type> Contracts(Type contract)
+        { return new[] { contract }.Concat(contract.GetInterfaces()); }
+        private static bool Matches(ParameterInfo[] parameters, object[] arguments)
+        {
+            if (parameters.Length != arguments.Length) return false;
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                var type = parameters[i].ParameterType;
+                if (type.IsByRef || type.IsPointer || type.ContainsGenericParameters) return false;
+                if (arguments[i] == null)
+                {
+                    if (type.IsValueType && Nullable.GetUnderlyingType(type) == null) return false;
+                }
+                else if (!type.IsInstanceOfType(arguments[i])) return false;
+            }
+            return true;
+        }
+        internal static object Get(Type contract, object instance, string member, params object[] indexes)
+        {
+            var arguments = indexes ?? new object[0];
+            var candidates = Contracts(contract).SelectMany(t => t.GetProperties(Members))
+                .Where(p => p.Name == member && p.GetGetMethod() != null && Matches(p.GetIndexParameters(), arguments)).Distinct().ToArray();
+            if (candidates.Length == 0) throw new MissingMemberException();
+            if (candidates.Length != 1) throw new AmbiguousMatchException();
+            return candidates[0].GetValue(instance, BindingFlags.Default, null, arguments, CultureInfo.InvariantCulture);
+        }
+        internal static object Call(Type contract, object instance, string member, params object[] args)
+        {
+            var arguments = args ?? new object[0];
+            var candidates = Contracts(contract).SelectMany(t => t.GetMethods(Members))
+                .Where(m => m.Name == member && !m.IsSpecialName && !m.ContainsGenericParameters && Matches(m.GetParameters(), arguments)).Distinct().ToArray();
+            if (candidates.Length == 0) throw new MissingMemberException();
+            if (candidates.Length != 1) throw new AmbiguousMatchException();
+            return candidates[0].Invoke(instance, BindingFlags.Default, null, arguments, CultureInfo.InvariantCulture);
+        }
+    }
+
     internal sealed class ReflectedPlcProjectAssociationAccess : IPlcProjectAssociationAccess
     {
         public object Dte { get; private set; }
@@ -347,15 +390,13 @@ namespace TwinCatMcp.Engineering.Host
         { if (dte == null || types == null) throw new ArgumentNullException(); Dte = dte; this.types = types; }
         private Type Resolve(string name) { return types.Resolve(name); }
         public bool Supports(object target, string name) { return target != null && Resolve(name).IsInstanceOfType(target); }
-        private static Type Declaring(Type type, string member)
-        { return new[] { type }.Concat(type.GetInterfaces()).First(t => t.GetMember(member, BindingFlags.Public | BindingFlags.Instance).Length != 0); }
         public object Get(object target, string name, string member, params object[] indexes)
         {
             var allowed = new[] { "Solution", "FullName", "Projects", "FileName", "Kind", "ProjectItems", "Count", "SubProject", "Object", "Child", "ChildCount" };
             if (!allowed.Contains(member, StringComparer.Ordinal)) throw new PlcProjectAssociationException("unsupported", "association_member_unavailable");
             var type = Resolve(name);
             if (target == null || !type.IsInstanceOfType(target)) throw new PlcProjectAssociationException("unsupported", "association_interface_unavailable");
-            return Declaring(type, member).InvokeMember(member, BindingFlags.GetProperty, null, target, indexes, CultureInfo.InvariantCulture);
+            return InteropMemberAccess.Get(type, target, member, indexes);
         }
         public object Call(object target, string name, string member, params object[] args)
         {
@@ -365,7 +406,7 @@ namespace TwinCatMcp.Engineering.Host
                 throw new PlcProjectAssociationException("unsupported", "association_method_unavailable");
             var type = Resolve(name);
             if (target == null || !type.IsInstanceOfType(target)) throw new PlcProjectAssociationException("unsupported", "association_interface_unavailable");
-            return Declaring(type, member).InvokeMember(member, BindingFlags.InvokeMethod, null, target, args, CultureInfo.InvariantCulture);
+            return InteropMemberAccess.Call(type, target, member, args);
         }
     }
 }
