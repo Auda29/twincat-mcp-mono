@@ -344,7 +344,11 @@ source-file/editor baseline. The digest, timestamp and consistency label are nul
 on non-success.
 The child count covers direct `TIPC` children of the unique owner. It does not
 describe dependencies or attest build scope; `buildScopeStatus` is `unknown`.
-Only the unnamespaced `TreeItem/PlcDef/ProjectPath` XML shape is supported.
+The unnamespaced `TreeItem/PlcProjectDef/ProjectPath` shape reported by TwinCAT
+3.1.4024.78 is supported, alongside the earlier `TreeItem/PlcDef/ProjectPath`
+shape. Exactly one definition and one plain-text, attribute-free `ProjectPath`
+are required; mixed or duplicate definitions, namespaces, and nested path
+elements are rejected. Sibling project metadata does not select the target.
 An absent, ambiguous, relative or unverifiable mapping fails
 closed. This observation does not authorize a build or a source edit. It is
 conditional on the host's loaded Automation Interface and remains unverified
