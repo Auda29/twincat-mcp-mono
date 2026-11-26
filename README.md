@@ -12,15 +12,16 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.10 native approval timeout
+## Engineering 0.5.11 release receipt alignment
 
-Engineering 0.5.10 gives the authenticated client pipe 125 seconds for build,
-source apply, source rollback, and source create requests that need native
-approval. Other requests keep the 30-second timeout.
+Engineering 0.5.11 records the SHA-256 of the release commit's own
+Git archive of `native/Engineering.Host` in `receipt.module.sourceTreeSha256`.
+It retains the 0.5.10 runtime behavior and native host source, including
+the 125-second client timeout for requests that require native approval.
 
-Use the [Engineering 0.5.10 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.10)
+Use the [Engineering 0.5.11 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.11)
 and verify the schema 2 receipt and downloaded assets. The Build (9), Editor
-(16), and Debug (11) catalogs match 0.5.9 byte for byte.
+(16), and Debug (11) catalogs match 0.5.10 byte for byte.
 
 ## Historical Engineering 0.5.9 Automation Interface ST Editor
 
