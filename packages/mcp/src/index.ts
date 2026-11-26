@@ -1602,7 +1602,7 @@ export async function main(): Promise<void> {
   }
   const liveTools = binding === undefined ? [] : createLiveEngineeringToolDefinitions({
     context: { sessionId: binding.sessionId, ...binding.expected },
-    dispatch: (request) => binding!.client.dispatch(request),
+    dispatch: (request, timeoutMs) => binding!.client.dispatch(request, timeoutMs),
   }, { enableDevelopmentSourceTools: editorHost, enableDebugTools: debugHost });
   // Debug opens a read-only ADS connection on demand, after the host confirms
   // the target and grant. The other owned children never open an ADS connection.

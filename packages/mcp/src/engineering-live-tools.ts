@@ -25,7 +25,7 @@ export type LiveEngineeringContext = z.infer<typeof contextSchema>;
 export interface LiveEngineeringToolBinding {
   readonly context: Readonly<LiveEngineeringContext>;
   /** Authenticated host transport, bound outside model-visible tool arguments. */
-  readonly dispatch: (requestJson: string) => Promise<string>;
+  readonly dispatch: (requestJson: string, timeoutMs: number) => Promise<string>;
 }
 
 const startInput = z.object({}).strict();
@@ -112,13 +112,13 @@ export function createLiveEngineeringToolDefinitions(
   const { sessionId, ...identity } = context;
   const expected = Object.freeze(identity);
 
-  const invoke = async (operation: string, args: Record<string, unknown>): Promise<unknown> => {
+  const invoke = async (operation: string, args: Record<string, unknown>, approval = false): Promise<unknown> => {
     const operationId = randomUUID();
     const target = typeof args.targetOperationId === "string" ? args.targetOperationId : operationId;
     const request = JSON.stringify({ protocolVersion: 1, sessionId, operationId, operation, expected, arguments: args });
     try {
       // Exactly one dispatch. In particular, an unknown submission is not retried.
-      const text = await dispatch(request);
+      const text = await dispatch(request, approval ? 125_000 : 30_000);
       if (Buffer.byteLength(text, "utf8") > (operation.startsWith("source.") ? 1024 : 512) * 1024) throw new Error("Oversized response");
       const response = responseSchema.parse(JSON.parse(text));
       if (response.sessionId !== sessionId || response.operationId !== operationId) throw new Error("Response binding mismatch");
@@ -156,7 +156,7 @@ export function createLiveEngineeringToolDefinitions(
     description: "Submit a build of the exact host-bound PLC project after explicit native approval, using the configuration/platform returned by tc_session_describe. Nonempty or unverifiable build dependencies are refused. Query tc_operation_get and read build-owned diagnostics/output. Does not save or switch configuration.",
     inputSchema: buildInput,
     annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    execute: async (input: unknown) => { const selected = buildInput.parse(input); return invoke("build.start", { approvalExpiresUtc: new Date(Date.now() + 90_000).toISOString(), ...selected }); },
+    execute: async (input: unknown) => { const selected = buildInput.parse(input); return invoke("build.start", { approvalExpiresUtc: new Date(Date.now() + 90_000).toISOString(), ...selected }, true); },
   });
   const read = (name: string, title: string, operation: string, description: string, cancel = false): McpToolDefinition => ({
     name, title, description,
@@ -172,7 +172,7 @@ export function createLiveEngineeringToolDefinitions(
     annotations: mutation ? { destructiveHint: true, idempotentHint: false, openWorldHint: false } : { readOnlyHint: true, openWorldHint: false },
     execute: async (input: unknown) => {
       const args = schema.parse(input) as Record<string, unknown>;
-      return invoke(operation, mutation ? { ...args, approvalExpiresUtc: new Date(Date.now() + 90_000).toISOString() } : args);
+      return invoke(operation, mutation ? { ...args, approvalExpiresUtc: new Date(Date.now() + 90_000).toISOString() } : args, mutation);
     },
   });
 
