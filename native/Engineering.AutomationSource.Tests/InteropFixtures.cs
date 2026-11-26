@@ -102,6 +102,7 @@ namespace TCatSysManagerLib
         internal readonly List<TreeNode> Children = new List<TreeNode>();
         internal string PhysicalFile;
         internal Action<string> Written;
+        internal bool OmitPhysicalPath;
         internal bool FailReadback;
         internal bool FailAfterCreate;
         internal int CreateCount;
@@ -112,7 +113,7 @@ namespace TCatSysManagerLib
         [System.Runtime.CompilerServices.IndexerName("Child")]
         public ITcSmTreeItem this[int index] => Children[index - 1];
 
-        public virtual string ProduceXml(bool recursive) => new XElement("TreeItem", new XElement("VSProperties",
+        public virtual string ProduceXml(bool recursive) => OmitPhysicalPath ? "<TreeItem />" : new XElement("TreeItem", new XElement("VSProperties",
             new XElement("VSProperty", new XAttribute("Name", "FullPath"), new XAttribute("Value", PhysicalFile ?? "")))).ToString();
 
         internal TreeNode Add(TreeNode child)

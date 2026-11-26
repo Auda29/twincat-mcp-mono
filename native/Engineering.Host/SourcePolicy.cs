@@ -10,12 +10,17 @@ namespace TwinCatMcp.Engineering.Host
     internal interface ISourceEditor
     {
         bool HasVerifiedAtomicLiveBufferSemantics { get; }
-        SourceSnapshot Read(string contextIdentity, string objectId, string section);
+        SourceSnapshot Read(string contextIdentity, string objectId, string section, bool isRollback = false);
         // Revalidate the binding and exact expected text before submission.
         SourceExchangeOutcome CompareExchange(SourceEditRequest request);
     }
 
-    internal enum SourceExchangeOutcome { Applied, Conflict, UnsavedEditorChanges, Unsupported, Unknown }
+    internal enum SourceExchangeOutcome { Applied, Conflict, UnsavedEditorChanges, MixedLanguageOwner, Unsupported, Unknown }
+
+    internal sealed class MixedLanguageOwnerException : Exception
+    {
+        internal const string ErrorCode = "mixed_language_owner_unsupported";
+    }
 
     internal sealed class SourceSnapshot
     {
@@ -84,7 +89,7 @@ namespace TwinCatMcp.Engineering.Host
     internal sealed class SourceUnsupportedEditor : ISourceEditor
     {
         public bool HasVerifiedAtomicLiveBufferSemantics { get { return false; } }
-        public SourceSnapshot Read(string contextIdentity, string objectId, string section) { return null; }
+        public SourceSnapshot Read(string contextIdentity, string objectId, string section, bool isRollback = false) { return null; }
         public SourceExchangeOutcome CompareExchange(SourceEditRequest request) { return SourceExchangeOutcome.Unsupported; }
     }
 
@@ -97,7 +102,9 @@ namespace TwinCatMcp.Engineering.Host
     {
         internal const int MaxTextLength = 65536;
         internal const int MaxBufferLength = 2 * 1024 * 1024;
+        internal const int MaxRetainedChars = 16 * 1024 * 1024;
         private const int MaxOperations = 128;
+        private readonly RetentionBudget retention;
         private readonly object gate = new object();
         private readonly ISourceEditor editor;
         private readonly Func<string> currentContextIdentity;
@@ -113,11 +120,12 @@ namespace TwinCatMcp.Engineering.Host
             : this(new SourceUnsupportedEditor(), currentContextIdentity, consumeApproval) { }
 
         internal SourcePolicy(ISourceEditor editor, Func<string> currentContextIdentity, Func<SourceApproval, bool> consumeApproval,
-            Func<string, bool> authorizationCurrent = null, bool automationInterface = false)
+            Func<string, bool> authorizationCurrent = null, bool automationInterface = false, RetentionBudget retention = null)
         {
             if (editor == null || currentContextIdentity == null || consumeApproval == null) throw new ArgumentNullException();
             this.editor = editor;
             this.automationInterface = automationInterface;
+            this.retention = retention ?? new RetentionBudget();
             this.currentContextIdentity = currentContextIdentity;
             this.consumeApproval = consumeApproval;
             this.authorizationCurrent = authorizationCurrent;
@@ -159,6 +167,9 @@ namespace TwinCatMcp.Engineering.Host
                     try { proposedBuffer = snapshot.BuildReplacement(proposedText); }
                     catch { return Refused("source_replacement_unmappable"); }
                     if (!ValidBuffer(proposedBuffer)) return Refused("source_replacement_unmappable");
+                    // Journals and replay results share these strings with the preview.
+                    int imageChars = snapshot.Text.Length + proposedText.Length + snapshot.BufferText.Length + proposedBuffer.Length;
+                    if (!retention.TryReserve(imageChars)) return Refused("source_session_memory_limit");
                     var preview = new SourcePreview { ObjectId = objectId, Section = section, PreviewId = previewOperationId,
                         Before = snapshot.Text, After = proposedText, BeforeBuffer = snapshot.BufferText, AfterBuffer = proposedBuffer,
                         ProjectRevision = snapshot.ProjectRevision, BufferIdentity = snapshot.BufferIdentity, StateDigest = snapshot.StateDigest };
@@ -211,6 +222,9 @@ namespace TwinCatMcp.Engineering.Host
                         // Keep pre/post images even when submission has an unknown outcome.
                         journals.Add(operationId, new SourceJournal { Preview = preview, Outcome = "unknown" });
                         return true;
+                    }, () => {
+                        preview.Consumed = false;
+                        journals.Remove(operationId);
                     }, (outcome, postState) => {
                         journals[operationId].Outcome = outcome;
                         journals[operationId].PostStateDigest = postState;
@@ -242,17 +256,19 @@ namespace TwinCatMcp.Engineering.Host
                             if (journal.RollbackSubmitted) return false;
                             journal.RollbackSubmitted = true;
                             return true;
-                        }, (outcome, _) => journal.RollbackOutcome = outcome);
+                        }, () => journal.RollbackSubmitted = false, (outcome, _) => journal.RollbackOutcome = outcome);
                 });
             }
         }
 
-        private SourceResult Mutate(string operationId, string operation, SourcePreview preview, Func<bool> submitting, Action<string, string> completed)
+        private SourceResult Mutate(string operationId, string operation, SourcePreview preview, Func<bool> submitting,
+            Action releaseSubmission, Action<string, string> completed)
         {
             SourceSnapshot current;
-            var check = ReadVerified(preview.ObjectId, preview.Section, out current);
+            bool isRollback = operation == "source.rollback";
+            var check = ReadVerified(preview.ObjectId, preview.Section, out current, isRollback);
             if (check != null) return check;
-            if (operation == "source.apply" && current.ApplyBlockedByDirtyState)
+            if (current.ApplyBlockedByDirtyState)
                 return new SourceResult("conflict", "unsaved_editor_changes");
             if (!string.Equals(current.StateDigest, preview.StateDigest, StringComparison.Ordinal) ||
                 !string.Equals(current.Text, preview.Before, StringComparison.Ordinal) ||
@@ -283,17 +299,24 @@ namespace TwinCatMcp.Engineering.Host
                 ExpectedText = preview.Before, ReplacementText = preview.After,
                 ExpectedBufferText = preview.BeforeBuffer, ReplacementBufferText = preview.AfterBuffer, ProjectRevision = preview.ProjectRevision,
                 BufferIdentity = preview.BufferIdentity, ExpectedStateDigest = preview.StateDigest,
-                IsRollback = operation == "source.rollback",
+                IsRollback = isRollback,
                 AuthorizationCurrent = () => authorizationCurrent == null || authorizationCurrent(operationId) };
             SourceExchangeOutcome outcome;
             try { outcome = editor.CompareExchange(request); }
             catch { outcome = SourceExchangeOutcome.Unknown; }
+            // These outcomes attest that the editor refused before any setter ran.
+            if (outcome == SourceExchangeOutcome.UnsavedEditorChanges || outcome == SourceExchangeOutcome.MixedLanguageOwner)
+            {
+                releaseSubmission();
+                return outcome == SourceExchangeOutcome.UnsavedEditorChanges
+                    ? new SourceResult("conflict", "unsaved_editor_changes")
+                    : new SourceResult("unsupported", MixedLanguageOwnerException.ErrorCode);
+            }
             var status = outcome == SourceExchangeOutcome.Applied ? "succeeded" :
-                outcome == SourceExchangeOutcome.Conflict || outcome == SourceExchangeOutcome.UnsavedEditorChanges ? "conflict" :
+                outcome == SourceExchangeOutcome.Conflict ? "conflict" :
                 outcome == SourceExchangeOutcome.Unsupported ? "unsupported" : "unknown";
             completed(status, request.VerifiedPostStateDigest);
-            var error = status == "succeeded" ? null : outcome == SourceExchangeOutcome.UnsavedEditorChanges
-                ? "unsaved_editor_changes" : "source_exchange_" + status;
+            var error = status == "succeeded" ? null : "source_exchange_" + status;
             return new SourceResult(status, error, WithSource(new Dictionary<string, object> {
                 { "journalOperationId", preview.JournalId ?? operationId },
                 { "baselineDigest", Digest(preview.BeforeBuffer) }, { "proposedDigest", Digest(preview.AfterBuffer) },
@@ -327,11 +350,12 @@ namespace TwinCatMcp.Engineering.Host
             return null;
         }
 
-        private SourceResult ReadVerified(string objectId, string section, out SourceSnapshot snapshot)
+        private SourceResult ReadVerified(string objectId, string section, out SourceSnapshot snapshot, bool isRollback = false)
         {
             snapshot = null;
             if (!ContextMatches()) return Refused("stale_context");
-            try { snapshot = editor.Read(contextIdentity, objectId, section); }
+            try { snapshot = editor.Read(contextIdentity, objectId, section, isRollback); }
+            catch (MixedLanguageOwnerException) { return new SourceResult("unsupported", MixedLanguageOwnerException.ErrorCode); }
             catch { return Refused("source_observation_failed"); }
             if (!ContextMatches()) return Refused("stale_context");
             if (snapshot == null || !(automationInterface ? snapshot.IsVerifiedAutomationSource : snapshot.IsVerifiedLiveBuffer) || !snapshot.IsExistingStructuredTextObject ||
@@ -399,6 +423,22 @@ namespace TwinCatMcp.Engineering.Host
             var value = new StringBuilder();
             foreach (var part in parts) value.Append(part == null ? "-1:" : part.Length + ":" + part);
             return Digest(value.ToString());
+        }
+
+        internal sealed class RetentionBudget
+        {
+            private readonly object gate = new object();
+            private int retainedChars;
+
+            internal bool TryReserve(int imageChars)
+            {
+                lock (gate)
+                {
+                    if (imageChars > MaxRetainedChars - retainedChars) return false;
+                    retainedChars += imageChars;
+                    return true;
+                }
+            }
         }
 
         private sealed class SourcePreview

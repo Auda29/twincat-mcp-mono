@@ -3,8 +3,10 @@
 ## Unreleased Editor profile changes
 
 The Editor catalog gains `plc_source_create` for 16 tools. The Build and Debug
-catalogs retain their 0.5.8 bytes. The Editor provider adds project-wide
-Automation Interface ST discovery and approved source editing and creation.
+catalogs match the published 0.5.8 assets byte for byte. The Editor catalog
+SHA-256 is `bd5d205ceec3f465d732fa921687e5e13b6a9e7f4c17a079bf1915f42704e954`.
+The Editor provider adds project-wide Automation Interface ST discovery and
+approved source editing and creation.
 The nine-parameter host factory takes three additional authoritative type
 names through its existing callback. See the
 [provider contract](native-engineering-provider-v1.md#editor-profile-source-operations)

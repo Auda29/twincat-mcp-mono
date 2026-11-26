@@ -87,6 +87,8 @@ describe("explicit live engineering tools", () => {
       type: "object", required: ["parentPath", "name", "kind"], additionalProperties: false,
       properties: {
         kind: { enum: ["fb", "prg", "fun", "method", "action", "property", "dut_struct", "gvl"] },
+        name: { description: "Non-reserved IEC identifier." },
+        returnType: { description: expect.stringContaining("optional for method") },
         declarationText: { maxLength: 65536 }, implementationText: { maxLength: 65536 },
       },
     });
@@ -100,10 +102,24 @@ describe("explicit live engineering tools", () => {
     const expiry = Date.parse(sent.arguments.approvalExpiresUtc);
     expect(expiry).toBeGreaterThan(before);
     expect(expiry).toBeLessThanOrEqual(Date.now() + 120_000);
+    const method = { parentPath: args.parentPath, name: "M_Run", kind: "method" };
+    for (const returnType of [undefined, "pVoId", "DATE_AND_TIME", "UDT_Result"]) {
+      await expect(create.execute({ ...method, returnType })).resolves.toMatchObject({ status: "refused", error: "approval_required" });
+      const methodArgs = JSON.parse(dispatch.mock.lastCall![0]).arguments;
+      expect(methodArgs).toMatchObject(method);
+      if (returnType === undefined) expect(methodArgs).not.toHaveProperty("returnType");
+      else expect(methodArgs.returnType).toBe(returnType);
+    }
+    for (const reserved of ["END_IF", "whILe", "VAR", "TRUE", "FALSE", "PUBLIC", "VAR_INST", "READ_ONLY"]) {
+      await expect(create.execute({ ...method, returnType: reserved })).rejects.toThrow();
+      await expect(create.execute({ ...method, name: reserved })).rejects.toThrow();
+    }
     for (const invalid of [
       { ...args, parentPath: "POUs^^FB" }, { ...args, parentPath: "POUs^.." },
       { ...args, parentPath: "POUs^a/b" }, { ...args, parentPath: "POUs^\u0085a" },
-      { ...args, name: "bad.name" }, { ...args, name: "ok\n" }, { ...args, returnType: undefined },
+      { ...args, name: "bad.name" }, { ...args, name: "ok\n" }, { ...args, name: "int" }, { ...args, returnType: undefined },
+      { ...method, returnType: "" }, { ...method, returnType: null },
+      { parentPath: "POUs", name: "F_Test", kind: "fun" },
       { ...args, returnType: "ARRAY[0..1] OF INT" }, { ...args, access: "private" }, { ...args, createSet: 1 },
       { ...args, implementationText: "a := 2;" }, { ...args, approvalExpiresUtc: sent.arguments.approvalExpiresUtc },
       { parentPath: "POUs", name: "FB", kind: "fb", returnType: "INT" },
@@ -112,7 +128,7 @@ describe("explicit live engineering tools", () => {
       { parentPath: "GVLs", name: "G", kind: "gvl", access: "PUBLIC" },
       { parentPath: "DUTs", name: "D", kind: "dut_struct", implementationText: "" },
     ]) await expect(create.execute(invalid)).rejects.toThrow();
-    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(5);
   });
 
   it("supports 65536-unit source text and expanded before/after JSON while maintaining a response cap", async () => {

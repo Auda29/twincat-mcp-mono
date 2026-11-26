@@ -96,31 +96,55 @@ internal static class SourcePolicyChecks
         Status(policy.Read("POU:Main", "implementation"), "refused", "stale context read");
         Expect(editor.Writes == writes, "rebind prevents mutation");
 
+        CheckRetentionBudget();
         Console.WriteLine("Source policy synthetic checks passed: " + checks);
         return 0;
+    }
+
+    private static void CheckRetentionBudget()
+    {
+        const string context = "retention-session";
+        const string target = "POU:Main", section = "implementation";
+        var editor = new FakeEditor(() => context) { BufferPadding = new string('x', SourcePolicy.MaxBufferLength - 16) };
+        var retention = new SourcePolicy.RetentionBudget();
+        var policy = new SourcePolicy(editor, () => context, _ => true, retention: retention);
+        var otherPolicy = new SourcePolicy(editor, () => context, _ => true, retention: retention);
+        var firstPreview = Id();
+        Status(policy.Preview(firstPreview, target, section, "first"), "succeeded", "large XML preview");
+        var apply = Id();
+        Status(policy.Apply(apply, firstPreview), "succeeded", "large XML apply shares the retained images");
+        for (int i = 0; i < 3; i++)
+            Status(policy.Preview(Id(), target, section, "next"), "succeeded", "large XML preview fits aggregate budget");
+        var rejected = policy.Preview(Id(), target, section, "over budget");
+        Expect(rejected.Status == "refused" && rejected.ErrorCode == "source_session_memory_limit", "aggregate retained preview and journal budget");
+        Expect(otherPolicy.Preview(Id(), target, section, "over budget").ErrorCode == "source_session_memory_limit", "session policies share the retention budget");
+        Status(policy.GetJournal(apply), "succeeded", "memory limit leaves previous journal readable");
+        Status(policy.Rollback(Id(), apply), "succeeded", "memory limit leaves previous journal usable");
     }
 
     private sealed class FakeEditor : ISourceEditor
     {
         private readonly Func<string> context;
         internal string Text = "original";
+        internal string BufferPadding = "";
         internal int Writes;
         internal bool Attested = true;
         internal bool ThrowAfterWrite;
         internal Action BeforeExchange;
         internal FakeEditor(Func<string> context) { this.context = context; }
         public bool HasVerifiedAtomicLiveBufferSemantics { get { return true; } }
-        public SourceSnapshot Read(string contextIdentity, string objectId, string section)
+        public SourceSnapshot Read(string contextIdentity, string objectId, string section, bool isRollback = false)
         {
             return new SourceSnapshot { ContextIdentity = context(), ObjectId = objectId, Section = section,
-                Text = Text, BufferText = Text, ProjectRevision = "project", BufferIdentity = this, BuildReplacement = text => text,
+                Text = Text, BufferText = BufferPadding + Text, ProjectRevision = "project", BufferIdentity = this,
+                BuildReplacement = text => BufferPadding + text,
                 IsExistingStructuredTextObject = Attested, IsOrdinaryPlcSource = Attested,
                 IsUnambiguousIdentity = Attested, IsVerifiedLiveBuffer = Attested };
         }
         public SourceExchangeOutcome CompareExchange(SourceEditRequest request)
         {
             if (BeforeExchange != null) BeforeExchange();
-            if (request.ContextIdentity != context() || Text != request.ExpectedText || Text != request.ExpectedBufferText || !Attested)
+            if (request.ContextIdentity != context() || Text != request.ExpectedText || BufferPadding + Text != request.ExpectedBufferText || !Attested)
                 return SourceExchangeOutcome.Conflict;
             Text = request.ReplacementText;
             Writes++;

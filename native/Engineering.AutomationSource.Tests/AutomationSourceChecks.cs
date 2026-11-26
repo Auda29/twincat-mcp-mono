@@ -30,7 +30,7 @@ internal sealed class AutomationSourceChecks : IDisposable
 
     private AutomationSourceChecks(bool enable = true)
     {
-        var directory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "automation-source-fixture"));
+        var directory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "automation-source-fixture-" + Guid.NewGuid().ToString("N")));
         context = new HostContext(Guid.NewGuid(), 1234, DateTime.UtcNow, Path.Combine(directory, "Fixture.sln"),
             Path.Combine(directory, "Fixture.plcproj"), "epoch");
         expected = new { idePid = context.IdePid, ideStartedUtc = context.IdeStartedUtc.ToString("o"),
@@ -40,6 +40,7 @@ internal sealed class AutomationSourceChecks : IDisposable
         var tipc = new TreeNode { Name = "TIPC", ItemType = 1 };
         tipc.Add(plc);
         pous = root.Add(Folder("POUs", directory));
+        pous.PhysicalFile = Path.Combine(directory, "POUs;Sources");
         duts = root.Add(Folder("DUTs", directory));
         gvls = root.Add(Folder("GVLs", directory));
         folder = pous.Add(Folder("SubFolder", pous.PhysicalFile));
@@ -167,7 +168,11 @@ internal sealed class AutomationSourceChecks : IDisposable
         Expect((string)p["proposedText"] == "a := 1;\n" && (string)p["proposedDigest"] == Hash("a := 1;\n"), "Preview normalizes before approval");
         document.Saved = false;
         Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
-        Expect(approvals.Count == 0, "DTE dirty independently refuses before approval");
+        Expect(approvals.Count == 0, "DTE member moniker with a semicolon in the physical path refuses before approval");
+        document.FullName = main.PhysicalFile;
+        Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
+        Expect(approvals.Count == 0, "The exact physical moniker with a semicolon also refuses before approval");
+        document.FullName += ";Run";
         Clean();
         dirtyPaths.Add(main.PhysicalFile);
         Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
@@ -211,7 +216,11 @@ internal sealed class AutomationSourceChecks : IDisposable
         Clean();
         p = Preview(mainId, "PROGRAM Main\r\nVAR\r\nEND_VAR", "declaration");
         onApproval = () => document.Saved = false;
-        Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
+        var refusedId = Guid.NewGuid();
+        Status(Call("source.apply", ApplyArgs(p), refusedId), "conflict", "unsaved_editor_changes");
+        Status(Call("source.journal", new { journalId = refusedId.ToString("D") }), "refused", "journal_not_found");
+        Clean();
+        Status(Call("source.apply", ApplyArgs(p)), "succeeded");
         Clean();
         p = Preview(mainId, "valid fresh preview", "declaration");
         method.Impl = "different sibling";
@@ -239,6 +248,107 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(Call("source.preview", new { objectId = methodId, section = "implementation", proposedText = new string('x', 65537) }), "refused", "invalid_source_text");
     }
 
+    private void DirtyRollback()
+    {
+        documents.Values.Clear();
+        var first = Preview(methodId, "a := 1;");
+        var applyId = Guid.NewGuid();
+        Status(Call("source.apply", ApplyArgs(first), applyId), "succeeded");
+        Expect(dirtyPaths.Contains(main.PhysicalFile) && documents.Count == 0, "Host dirty without a matching DTE document");
+
+        var second = Preview(methodId, "a := 2;");
+        var approvalCount = approvals.Count;
+        Status(Call("source.apply", ApplyArgs(second)), "conflict", "unsaved_editor_changes");
+        var rollback = RollbackArgs(first, applyId);
+        Status(Call("source.rollback", rollback), "conflict", "unsaved_editor_changes");
+        documents.Values.Add(document);
+        document.ExposeText = false;
+        Status(Call("source.rollback", rollback), "conflict", "unsaved_editor_changes");
+        Expect(approvals.Count == approvalCount && method.Impl == "a := 1;", "Unverifiable dirty state refuses before approval or write");
+        var journalArgs = new { journalId = applyId.ToString("D") };
+        Expect(!(bool)Result(Call("source.journal", journalArgs))["rollbackSubmitted"], "Dirty preflight leaves rollback available");
+
+        Clean();
+        onApproval = () => document.Saved = false;
+        var refusedId = Guid.NewGuid();
+        Status(Call("source.rollback", rollback, refusedId), "conflict", "unsaved_editor_changes");
+        Expect(!(bool)Result(Call("source.journal", journalArgs))["rollbackSubmitted"], "Dirty final comparison releases the rollback claim");
+        Clean();
+        Status(Call("source.rollback", rollback, refusedId), "conflict", "unsaved_editor_changes");
+        Status(Call("source.rollback", rollback), "succeeded");
+        Expect(method.Impl == "a := 0;\n", "Rollback restores the pre-image after saving and retrying with a fresh operation ID");
+    }
+
+    private void MixedOwner()
+    {
+        var first = Preview(methodId, "a := 1;");
+        var applyId = Guid.NewGuid();
+        Status(Call("source.apply", ApplyArgs(first), applyId), "succeeded");
+        Clean();
+        var second = Preview(methodId, "a := 2;");
+        var graphical = new ImplementationNode { Name = "MixedAction", ItemType = 608, Language = LanguageType.LD };
+        onApproval = () => main.Add(graphical);
+        const string error = "mixed_language_owner_unsupported";
+        Status(Call("source.apply", ApplyArgs(second)), "unsupported", error);
+        var approvalCount = approvals.Count;
+        var rows = ((object[])Result(Call("source.targets", new { moniker = main.PhysicalFile }))["targets"]).Select(Map).ToArray();
+        Expect(rows.Length == 6 && rows.All(row => !((string)row["treePath"]).EndsWith("^MixedAction", StringComparison.Ordinal)), "Discovery omits graphical members");
+        Status(Call("source.read", new { objectId = mainId, section = "declaration" }), "unsupported", error);
+        Status(Call("source.preview", new { objectId = methodId, section = "implementation", proposedText = "a := 3;" }), "unsupported", error);
+        Status(Call("source.apply", ApplyArgs(second)), "unsupported", error);
+        Status(Call("source.rollback", RollbackArgs(first, applyId)), "unsupported", error);
+        Status(Call("source.create", CreateArgs("POUs^Main", "A_Mixed", "action")), "unsupported", error);
+        Expect(approvals.Count == approvalCount && main.CreateCount == 0 && method.Impl == "a := 1;", "Mixed owner refuses without approval or mutation");
+
+        main.Children.Remove(graphical);
+        var getter = (FullSource)main.Children.Single(child => child.ItemType == 611).Children[0];
+        getter.Language = LanguageType.LD;
+        Status(Call("source.read", new { objectId = mainId, section = "implementation" }), "unsupported", error);
+    }
+
+    private void CreationDiskBoundary()
+    {
+        var projectDirectory = Path.GetDirectoryName(context.ProjectFile);
+        Directory.CreateDirectory(folder.PhysicalFile);
+        try
+        {
+            var existing = Path.Combine(folder.PhysicalFile, "EXISTING.TcPOU");
+            File.WriteAllText(existing, "unreferenced fixture file");
+            Status(Call("source.create", CreateArgs("POUs^SubFolder", "Existing", "fb")), "conflict", "target_file_already_exists");
+            Expect(File.ReadAllText(existing) == "unreferenced fixture file" && approvals.Count == 0 && folder.CreateCount == 0,
+                "An unreferenced case-insensitive disk collision refuses before approval");
+
+            var mappedDirectory = Path.Combine(projectDirectory, "MappedDUTs");
+            Directory.CreateDirectory(mappedDirectory);
+            duts.PhysicalFile = mappedDirectory;
+            Directory.CreateDirectory(Path.Combine(mappedDirectory, "Existing.TcDUT"));
+            Status(Call("source.create", CreateArgs("DUTs", "Existing", "dut_struct")), "conflict", "target_file_already_exists");
+            Expect(approvals.Count == 0 && duts.CreateCount == 0, "Directory collision uses the XML folder FullPath");
+
+            Directory.CreateDirectory(gvls.PhysicalFile);
+            gvls.OmitPhysicalPath = true;
+            File.WriteAllText(Path.Combine(gvls.PhysicalFile, "Existing.TcGVL"), "unreferenced GVL");
+            Status(Call("source.create", CreateArgs("GVLs", "Existing", "gvl")), "conflict", "target_file_already_exists");
+            Expect(approvals.Count == 0 && gvls.CreateCount == 0, "Missing folder FullPath falls back to the PLC-relative directory");
+
+            onApproval = () => File.WriteAllText(Path.Combine(folder.PhysicalFile, "Late.TcPOU"), "appeared during approval");
+            Status(Call("source.create", CreateArgs("POUs^SubFolder", "Late", "fb")), "conflict", "target_file_already_exists");
+            Expect(approvals.Count == 1 && folder.CreateCount == 0, "Recheck disk right before CreateChild");
+
+            main.PhysicalFile = Path.Combine(projectDirectory + "-linked", "Main.TcPOU");
+            Status(Call("source.create", CreateArgs("POUs^Main", "A_Linked", "action")), "refused", "creation_path_outside_project");
+            folder.PhysicalFile = projectDirectory + "-linked";
+            Status(Call("source.create", CreateArgs("POUs^SubFolder", "Outside", "fb")), "refused", "creation_path_outside_project");
+            Expect(approvals.Count == 1 && main.CreateCount == 0 && folder.CreateCount == 0, "Linked owner and mapped folder outside the PLC project refuse before approval");
+        }
+        finally
+        {
+            if (!Path.GetFullPath(projectDirectory).StartsWith(Path.Combine(Path.GetTempPath(), "automation-source-fixture-"), StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException();
+            Directory.Delete(projectDirectory, true);
+        }
+    }
+
     private Dictionary<string, object> CreateArgs(string parent, string name, string kind)
     {
         return new Dictionary<string, object> { { "parentPath", parent }, { "name", name }, { "kind", kind }, { "approvalExpiresUtc", Expiry() } };
@@ -250,16 +360,17 @@ internal sealed class AutomationSourceChecks : IDisposable
             new { Kind = "fb", Parent = "POUs^SubFolder", Name = "FB_New", Type = 604, Owner = folder, Info = new[] { "ST" } },
             new { Kind = "prg", Parent = "POUs", Name = "PRG_New", Type = 602, Owner = pous, Info = new[] { "ST" } },
             new { Kind = "fun", Parent = "POUs", Name = "F_New", Type = 603, Owner = pous, Info = new[] { "ST", "INT" } },
-            new { Kind = "method", Parent = "POUs^Main", Name = "M_New", Type = 609, Owner = (TreeNode)main, Info = new[] { "ST", "INT", "PUBLIC" } },
+            new { Kind = "method", Parent = "POUs^Main", Name = "M_New", Type = 609, Owner = (TreeNode)main, Info = new[] { "ST", "pVoId", "PUBLIC" } },
+            new { Kind = "method", Parent = "POUs^Main", Name = "M_Void", Type = 609, Owner = (TreeNode)main, Info = new[] { "ST", "", "PUBLIC" } },
             new { Kind = "action", Parent = "POUs^Main", Name = "A_New", Type = 608, Owner = (TreeNode)main, Info = new[] { "ST" } },
-            new { Kind = "property", Parent = "POUs^Main", Name = "P_New", Type = 611, Owner = (TreeNode)main, Info = new[] { "ST", "INT", "PROTECTED" } },
+            new { Kind = "property", Parent = "POUs^Main", Name = "P_New", Type = 611, Owner = (TreeNode)main, Info = new[] { "ST", "ST_Result", "PROTECTED" } },
             new { Kind = "dut_struct", Parent = "DUTs", Name = "ST_New", Type = 606, Owner = duts, Info = (string[])null },
             new { Kind = "gvl", Parent = "GVLs", Name = "GVL_New", Type = 615, Owner = gvls, Info = (string[])null }
         })
         {
             Clean();
             var args = CreateArgs(item.Parent, item.Name, item.Kind);
-            if (item.Type == 603 || item.Type == 609 || item.Type == 611) args["returnType"] = "INT";
+            if (item.Type == 603 || item.Type == 611 || item.Name == "M_New") args["returnType"] = item.Info[1];
             if (item.Type == 611)
             {
                 args["access"] = "PROTECTED";
@@ -301,9 +412,16 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(Call("source.create", CreateArgs("POUs^Graphical", "A_No", "action")), "refused", "invalid_creation_parent_kind");
         foreach (var parent in new[] { "POUs^^Test", "POUs^..", "POUs^x/y", "POUs^ x", "POUs^x\n" })
             Status(Call("source.create", CreateArgs(parent, "BadParent", "fb")), "refused", "invalid_source_create_arguments");
-        foreach (var name in new[] { "1motor", "invalid.name", "name\n", new string('x', 65) })
+        foreach (var name in new[] { "1motor", "invalid.name", "name\n", new string('x', 65), "WHILE", "vAr_InPuT", "public", "True", "dInT", "aCtIoN", "sizeof" })
             Status(Call("source.create", CreateArgs("POUs", name, "fb")), "refused", "invalid_source_create_arguments");
         Status(Call("source.create", CreateArgs("POUs", "NoReturnType", "fun")), "refused", "invalid_source_create_arguments");
+        Status(Call("source.create", CreateArgs("POUs^Main", "P_NoType", "property")), "refused", "invalid_source_create_arguments");
+        foreach (var returnType in new[] { "END_IF", "while", "VAR", "TRUE", "false", "PUBLIC", null, "" })
+        {
+            var args = CreateArgs("POUs^Main", "M_Invalid", "method");
+            args["returnType"] = returnType;
+            Status(Call("source.create", args), "refused", "invalid_source_create_arguments");
+        }
         var invalid = CreateArgs("POUs^Main", "A_Invalid", "action");
         invalid["declarationText"] = "VAR";
         Status(Call("source.create", invalid), "refused", "invalid_source_create_arguments");
@@ -343,7 +461,10 @@ internal sealed class AutomationSourceChecks : IDisposable
             fixture.Discover();
             fixture.Edit();
         }
+        using (var fixture = new AutomationSourceChecks()) fixture.DirtyRollback();
+        using (var fixture = new AutomationSourceChecks()) fixture.MixedOwner();
         using (var fixture = new AutomationSourceChecks()) fixture.Create();
+        using (var fixture = new AutomationSourceChecks()) fixture.CreationDiskBoundary();
         using (var disabled = new AutomationSourceChecks(enable: false))
         {
             Status(disabled.Call("source.targets", new { }), "unsupported", "source_features_disabled");

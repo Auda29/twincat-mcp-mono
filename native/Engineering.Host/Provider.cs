@@ -295,6 +295,7 @@ namespace TwinCatMcp.Engineering.Host
                     if (args == null) return Failure(json, session, operation, "refused", "invalid_source_arguments");
                     InitializeSources(current);
                     SourceResult result;
+                    bool attachedPreview = false;
                     if (name == "source.create")
                     {
                         if (automationEditor == null) return Failure(json, session, operation, "unsupported", "automation_source_unavailable");
@@ -332,13 +333,13 @@ namespace TwinCatMcp.Engineering.Host
                             name == "source.read" ? source.Read(objectId, args["section"] as string)
                             : source.Preview(operation.ToString("D"), objectId, args["section"] as string, args.ContainsKey("proposedText") ? args["proposedText"] as string : null);
                         if (isAutomation && name == "source.preview" && result.Status == "succeeded") automationPreviews.Add(operation);
-                        if (!isAutomation && result.Status != "succeeded" && getSectionEditor != null)
+                        if (!isAutomation && result.Status != "succeeded" && result.ErrorCode != "source_session_memory_limit" && getSectionEditor != null)
                         {
                             var attached = name == "source.read" ? CustomReader(current).Read(args["objectId"] as string, args["section"] as string)
                                 : CustomReader(current).Preview(args["objectId"] as string, args["section"] as string, args.ContainsKey("proposedText") ? args["proposedText"] as string : null);
                             if (attached != null)
                             {
-                                if (name == "source.preview") customReadPreviews.Add(operation);
+                                attachedPreview = name == "source.preview";
                                 result = new SourceResult("succeeded", result: new Dictionary<string, object> {
                                     { "objectId", attached.ObjectId }, { "section", attached.Section }, { "text", attached.Text },
                                     { "beforeText", attached.Text }, { "proposedText", attached.ProposedText }, { "documentDigest", attached.Digest },
@@ -378,11 +379,23 @@ namespace TwinCatMcp.Engineering.Host
                     }
                     var sourceName = SourceResultField(result, "source") ?? "unknown";
                     var sourceDirty = SourceResultField(result, "dirtyState") ?? "unknown";
-                    var response = json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = result.Status,
-                        provenance = Provenance(null, sourceName, sourceDirty, SourceResultField(result, "persistence")),
-                        error = result.ErrorCode, result = result.Result });
-                    return Encoding.UTF8.GetByteCount(response) <= MaxResponseBytes ? response :
-                        Failure(json, session, operation, "unknown", "source_response_too_large");
+                    string response;
+                    try
+                    {
+                        response = json.Serialize(new { protocolVersion = 1, sessionId = session.ToString("D"), operationId = operation.ToString("D"), status = result.Status,
+                            provenance = Provenance(null, sourceName, sourceDirty, SourceResultField(result, "persistence")),
+                            error = result.ErrorCode, result = result.Result });
+                    }
+                    catch (InvalidOperationException) when (attachedPreview)
+                    {
+                        // The serializer enforces a character limit before the UTF-8 byte check.
+                        return Failure(json, session, operation, "refused", "source_preview_too_large");
+                    }
+                    if (Encoding.UTF8.GetByteCount(response) > MaxResponseBytes)
+                        return attachedPreview ? Failure(json, session, operation, "refused", "source_preview_too_large") :
+                            Failure(json, session, operation, "unknown", "source_response_too_large");
+                    if (attachedPreview) customReadPreviews.Add(operation);
+                    return response;
                 }
                 if (name == "project.online")
                 {
@@ -507,9 +520,12 @@ namespace TwinCatMcp.Engineering.Host
             if (getTextBuffer != null)
                 sourceEditor = new XmlStSourceEditor(bound.ProjectFile, getTextBuffer, dirty, ContextKey, key);
             automationEditor = AutomationStSourceEditor.TryCreate(dte, interopTypes, bound, dirty, getTextBuffer, ContextKey, key);
-            sources = new SourcePolicy((ISourceEditor)sourceEditor ?? new SourceUnsupportedEditor(), ContextKey, ConsumeSourceApproval, SourceAuthorizationCurrent);
+            var retention = new SourcePolicy.RetentionBudget();
+            sources = new SourcePolicy((ISourceEditor)sourceEditor ?? new SourceUnsupportedEditor(), ContextKey, ConsumeSourceApproval,
+                SourceAuthorizationCurrent, retention: retention);
             if (automationEditor != null)
-                automationSources = new SourcePolicy(automationEditor, ContextKey, ConsumeSourceApproval, SourceAuthorizationCurrent, automationInterface: true);
+                automationSources = new SourcePolicy(automationEditor, ContextKey, ConsumeSourceApproval, SourceAuthorizationCurrent,
+                    automationInterface: true, retention: retention);
         }
 
         private bool ConsumeSourceApproval(SourceApproval spec)

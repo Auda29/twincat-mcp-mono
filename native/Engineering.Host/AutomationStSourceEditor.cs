@@ -95,7 +95,7 @@ namespace TwinCatMcp.Engineering.Host
             catch { return new SourceResult("unsupported", "source_targets_unavailable"); }
         }
 
-        public SourceSnapshot Read(string contextIdentity, string objectId, string section)
+        public SourceSnapshot Read(string contextIdentity, string objectId, string section, bool isRollback = false)
         {
             if (contextIdentity != context) return null;
             var binding = Resolve();
@@ -109,7 +109,7 @@ namespace TwinCatMcp.Engineering.Host
                 ContextIdentity = context, ObjectId = objectId, Section = section, Text = state.Text, BufferText = state.Text,
                 StateDigest = stateDigest, BufferIdentity = target.Item, ProjectRevision = Revision(binding, target),
                 BuildReplacement = value => value, DirtyState = dirt.Label,
-                ApplyBlockedByDirtyState = HasXmlBuffer(target.PhysicalFile) || !CanWrite(target, dirt, stateDigest, rollback: false), IsVerifiedAutomationSource = true,
+                ApplyBlockedByDirtyState = HasXmlBuffer(target.PhysicalFile) || !CanWrite(target, dirt, stateDigest, isRollback), IsVerifiedAutomationSource = true,
                 IsExistingStructuredTextObject = true, IsUnambiguousIdentity = true, IsOrdinaryPlcSource = true
             };
         }
@@ -130,12 +130,9 @@ namespace TwinCatMcp.Engineering.Host
                 var dirt = ObserveDirty(target.PhysicalFile);
                 var state = CaptureSource(target, request.Section);
                 var stateDigest = state.Digest;
-                var allowed = !xmlOpen && CanWrite(target, dirt, stateDigest, request.IsRollback);
-                if (!request.IsRollback && !allowed) return SourceExchangeOutcome.UnsavedEditorChanges;
+                if (xmlOpen || !CanWrite(target, dirt, stateDigest, request.IsRollback))
+                    return SourceExchangeOutcome.UnsavedEditorChanges;
                 if (state.Text != request.ExpectedText || stateDigest != request.ExpectedStateDigest) return SourceExchangeOutcome.Conflict;
-                // Undo accepts the dirty flag left by our write only while the
-                // same documents and entire owning object's post-image still match.
-                if (!allowed) return SourceExchangeOutcome.UnsavedEditorChanges;
                 if (!request.AuthorizationCurrent() || !ContextMatches()) return SourceExchangeOutcome.Conflict;
 
                 var replacement = SourcePolicy.NormalizeLf(request.ReplacementText);
@@ -158,6 +155,7 @@ namespace TwinCatMcp.Engineering.Host
                         AllowsApply = !request.IsRollback };
                 return SourceExchangeOutcome.Applied;
             }
+            catch (MixedLanguageOwnerException) { return submitted ? SourceExchangeOutcome.Unknown : SourceExchangeOutcome.MixedLanguageOwner; }
             catch { return submitted ? SourceExchangeOutcome.Unknown : SourceExchangeOutcome.Conflict; }
             finally { writing = false; }
         }
@@ -170,21 +168,24 @@ namespace TwinCatMcp.Engineering.Host
             try
             {
                 var binding = Resolve();
-                var parent = ValidateCreationParent(binding, request);
+                var parent = ValidateCreationParent(binding, request, out var destination);
                 string parentImage = CreationParentImage(parent, request);
+                if (!request.IsMember) RequireAvailableFile(destination);
                 if (!approve()) return new SourceResult("refused", "approval_required");
                 if (!authorizationCurrent()) return new SourceResult("refused", "approval_expired");
 
                 var current = Resolve();
-                var currentParent = ValidateCreationParent(current, request);
+                var currentParent = ValidateCreationParent(current, request, out var currentDestination);
                 if (binding.MappingDigest != current.MappingDigest || !ReferenceEquals(parent.Item, currentParent.Item) ||
-                    parentImage != CreationParentImage(currentParent, request) || !authorizationCurrent() || !ContextMatches())
+                    !SameFile(destination, currentDestination) || parentImage != CreationParentImage(currentParent, request) ||
+                    !authorizationCurrent() || !ContextMatches())
                     return new SourceResult("conflict", "creation_parent_changed");
 
+                if (!request.IsMember) RequireAvailableFile(currentDestination);
                 submitted = true;
                 var item = CreateChild(currentParent, request.Name, request.ItemType, request.CreationInfo());
                 var target = MakeTarget(item, request.IsMember ? currentParent : null);
-                if (target == null || !ContextMatches()) return UnknownCreation();
+                if (target == null || !SameFile(target.PhysicalFile, currentDestination) || !ContextMatches()) return UnknownCreation();
                 if (request.CreateGet) CreateAccessor(target, "Get", 613, request.Access, authorizationCurrent);
                 if (request.CreateSet) CreateAccessor(target, "Set", 614, request.Access, authorizationCurrent);
                 WriteInitial(target, "declaration", request.Declaration, authorizationCurrent);
@@ -194,6 +195,7 @@ namespace TwinCatMcp.Engineering.Host
                 if (target.TreePath != request.TargetPath || FindTarget(current.Root, target.ObjectId)?.Item != target.Item) return UnknownCreation();
                 return new SourceResult("succeeded", result: Describe(target, "fileWrittenProjectPendingSave"));
             }
+            catch (MixedLanguageOwnerException) { return submitted ? UnknownCreation() : new SourceResult("unsupported", MixedLanguageOwnerException.ErrorCode); }
             catch (PlcProjectAssociationException e) { return submitted ? UnknownCreation() : new SourceResult(e.Status, e.Code); }
             catch { return submitted ? UnknownCreation() : new SourceResult("refused", "source_creation_preflight_unavailable"); }
             finally { writing = false; }
@@ -206,27 +208,81 @@ namespace TwinCatMcp.Engineering.Host
             return new SourceResult("unknown", "source_create_outcome_unknown", result);
         }
 
-        private Target ValidateCreationParent(Binding binding, AutomationSourceCreation request)
+        private Target ValidateCreationParent(Binding binding, AutomationSourceCreation request, out string destination)
         {
             var segments = request.ParentPath.Split('^');
             if (segments[0] != request.Folder || (request.IsMember && segments.Length < 2))
                 throw new PlcProjectAssociationException("refused", "invalid_creation_parent_kind");
             var parent = ResolvePath(binding.Root, segments);
             if (parent == null) throw new PlcProjectAssociationException("refused", "creation_parent_not_found");
-            bool validKind = request.IsMember ? (parent.Type == 602 || parent.Type == 604) && IsStructuredText(parent) : parent.Type == PlcFolder;
-            if (!validKind) throw new PlcProjectAssociationException("refused", "invalid_creation_parent_kind");
-            if (Children(parent).Any(child => string.Equals(child.Name, request.Name, StringComparison.OrdinalIgnoreCase)))
+
+            var projectDirectory = Path.GetDirectoryName(bound.ProjectFile);
+            if (request.IsMember)
+            {
+                if (parent.Type != 602 && parent.Type != 604)
+                    throw new PlcProjectAssociationException("refused", "invalid_creation_parent_kind");
+                parent = MakeTarget(parent, null);
+                if (parent == null) throw new PlcProjectAssociationException("refused", "invalid_creation_parent_kind");
+                destination = parent.PhysicalFile;
+                RequireProjectDescendant(projectDirectory, destination);
+            }
+            else
+            {
+                if (parent.Type != PlcFolder) throw new PlcProjectAssociationException("refused", "invalid_creation_parent_kind");
+                var directory = PhysicalFile(parent, Path.Combine(projectDirectory, Path.Combine(segments)));
+                RequireProjectDescendant(projectDirectory, directory);
+                var extension = request.ItemType == 606 ? ".TcDUT" : request.ItemType == 615 ? ".TcGVL" : ".TcPOU";
+                destination = Path.Combine(directory, request.Name + extension);
+            }
+
+            if (Children(parent).Any(child => SameFile(child.Name, request.Name)))
                 throw new PlcProjectAssociationException("conflict", "object_already_exists");
             return parent;
+        }
+
+        private static void RequireProjectDescendant(string projectDirectory, string path)
+        {
+            var prefix = Path.GetFullPath(projectDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (!CanonicalFile(path) || path.Length <= prefix.Length || !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                throw new PlcProjectAssociationException("refused", "creation_path_outside_project");
+
+            // A linked folder or file beneath the project can still redirect a write outside it.
+            var current = prefix;
+            foreach (var segment in path.Substring(prefix.Length).Split(Path.DirectorySeparatorChar))
+            {
+                current = Path.Combine(current, segment);
+                try
+                {
+                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                        throw new PlcProjectAssociationException("refused", "creation_path_outside_project");
+                }
+                catch (FileNotFoundException) { return; }
+                catch (DirectoryNotFoundException) { return; }
+            }
+        }
+
+        private static void RequireAvailableFile(string path)
+        {
+            if (File.Exists(path) || Directory.Exists(path))
+                throw new PlcProjectAssociationException("conflict", "target_file_already_exists");
+
+            // TwinCAT names are case-insensitive even in a case-sensitive Windows directory.
+            var name = Path.GetFileName(path);
+            try
+            {
+                if (Directory.EnumerateFileSystemEntries(Path.GetDirectoryName(path)).Any(entry => SameFile(Path.GetFileName(entry), name)))
+                    throw new PlcProjectAssociationException("conflict", "target_file_already_exists");
+            }
+            catch (DirectoryNotFoundException) { }
         }
 
         private string CreationParentImage(Target parent, AutomationSourceCreation request)
         {
             if (!request.IsMember) return null;
-            var target = MakeTarget(parent, null);
-            if (target == null || !ObserveDirty(target.PhysicalFile).Clean || HasXmlBuffer(target.PhysicalFile))
+            var digest = CaptureSource(parent, "declaration").Digest;
+            if (!ObserveDirty(parent.PhysicalFile).Clean || HasXmlBuffer(parent.PhysicalFile))
                 throw new PlcProjectAssociationException("conflict", "unsaved_editor_changes");
-            return CaptureSource(target, "declaration").Digest;
+            return digest;
         }
 
         private Target CreateChild(Target parent, string name, int itemType, string[] info)
@@ -298,13 +354,19 @@ namespace TwinCatMcp.Engineering.Host
             return current;
         }
 
-        private IEnumerable<Target> Enumerate(Target node, Target owner, int depth, VisitBudget budget)
+        private IEnumerable<Target> Enumerate(Target node, Target owner, int depth, VisitBudget budget, bool completeOwner = false)
         {
-            if (depth >= MaxDepth) yield break;
-            var children = Children(node).ToLookup(child => child.Name, StringComparer.OrdinalIgnoreCase);
+            if (depth >= MaxDepth && !completeOwner) yield break;
+            var children = Children(node, completeOwner).ToLookup(child => child.Name, StringComparer.OrdinalIgnoreCase);
+            if (depth >= MaxDepth && children.Count > 0)
+                throw new PlcProjectAssociationException("refused", "source_tree_limit");
             foreach (var siblings in children)
             {
-                if (siblings.Count() != 1) continue;
+                if (siblings.Count() != 1)
+                {
+                    if (completeOwner) throw new MixedLanguageOwnerException();
+                    continue;
+                }
                 var child = siblings.Single();
                 if (--budget.Remaining < 0) throw new PlcProjectAssociationException("refused", "source_tree_limit");
                 if (child.Type == PlcFolder && owner == null)
@@ -313,13 +375,17 @@ namespace TwinCatMcp.Engineering.Host
                     continue;
                 }
                 var target = MakeTarget(child, owner);
-                if (target == null) continue;
+                if (target == null)
+                {
+                    if (completeOwner) throw new MixedLanguageOwnerException();
+                    continue;
+                }
                 yield return target;
-                foreach (var nested in Enumerate(target, target.Owner, depth + 1, budget)) yield return nested;
+                foreach (var nested in Enumerate(target, target.Owner, depth + 1, budget, completeOwner)) yield return nested;
             }
         }
 
-        private IEnumerable<Target> Children(Target parent)
+        private IEnumerable<Target> Children(Target parent, bool completeOwner = false)
         {
             RequireContext();
             var count = (int)InteropMemberAccess.Get(tree, parent.Item, "ChildCount");
@@ -331,7 +397,11 @@ namespace TwinCatMcp.Engineering.Host
                 RequireContext();
                 var child = InteropMemberAccess.Get(tree, parent.Item, "Child", i);
                 var name = (string)InteropMemberAccess.Get(tree, child, "Name");
-                if (name == null || name.IndexOf('^') >= 0 || !AutomationSourceCreation.ValidTreePath(prefix + name)) continue;
+                if (name == null || name.IndexOf('^') >= 0 || !AutomationSourceCreation.ValidTreePath(prefix + name))
+                {
+                    if (completeOwner) throw new MixedLanguageOwnerException();
+                    continue;
+                }
                 children.Add(new Target { Item = child, Name = name, TreePath = prefix + name, Type = ItemType(child), Depth = parent.Depth + 1 });
             }
             return children;
@@ -409,17 +479,22 @@ namespace TwinCatMcp.Engineering.Host
             }
         }
 
-        private string PhysicalFile(Target target)
+        private string PhysicalFile(Target target, string fallback = null)
         {
             var xml = InteropMemberAccess.Call(tree, target.Item, "ProduceXml", false) as string;
-            if (string.IsNullOrEmpty(xml) || xml.Length > MaxXml) return null;
+            if (string.IsNullOrEmpty(xml)) return fallback;
+            if (xml.Length > MaxXml) return null;
             XDocument parsed;
             using (var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXml }))
                 parsed = XDocument.Load(reader);
             if (parsed.Root == null || parsed.Root.Name.LocalName != "TreeItem") return null;
-            var paths = parsed.Descendants().Where(e => e.Name.LocalName == "VSProperty").Select(FullPathProperty)
-                .Where(value => value != null).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            return paths.Length == 1 && CanonicalFile(paths[0]) ? paths[0] : null;
+            var paths = parsed.Descendants().Where(e => e.Name.LocalName == "VSProperty").Select(FullPathProperty);
+            if (target.Type == PlcFolder)
+                paths = paths.Concat(parsed.Root.DescendantsAndSelf().Where(e => e.Name.LocalName == "FullPath").Select(e => e.Value))
+                    .Concat(parsed.Root.DescendantsAndSelf().Attributes().Where(a => a.Name.LocalName == "FullPath").Select(a => a.Value));
+            var distinctPaths = paths.Where(value => value != null).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (distinctPaths.Length == 0) return fallback;
+            return distinctPaths.Length == 1 && CanonicalFile(distinctPaths[0]) ? distinctPaths[0] : null;
         }
 
         private static string FullPathProperty(XElement element)
@@ -460,7 +535,9 @@ namespace TwinCatMcp.Engineering.Host
                     RequireContext();
                     var entry = InteropMemberAccess.Call(documents, collection, "Item", i);
                     var fullName = InteropMemberAccess.Get(document, entry, "FullName") as string;
-                    if (SameFile(fullName?.Split(';')[0], path) && !(bool)InteropMemberAccess.Get(document, entry, "Saved"))
+                    bool matches = SameFile(fullName, path) || (fullName != null && fullName.Length > path.Length &&
+                        fullName[path.Length] == ';' && SameFile(fullName.Substring(0, path.Length), path));
+                    if (matches && !(bool)InteropMemberAccess.Get(document, entry, "Saved"))
                         unsaved.Add(new UnsavedDocument { Identity = entry, Moniker = fullName, TextDigest = ObserveDocumentText(entry) });
                 }
                 return new DirtyEvidence { HostDirty = dirty, Unsaved = unsaved.ToArray() };
@@ -491,7 +568,7 @@ namespace TwinCatMcp.Engineering.Host
             var image = new FileImage();
             var budget = new VisitBudget();
             int total = 0;
-            foreach (var item in new[] { owner }.Concat(Enumerate(owner, owner, owner.Depth, budget)).OrderBy(x => x.TreePath, StringComparer.Ordinal))
+            foreach (var item in new[] { owner }.Concat(Enumerate(owner, owner, owner.Depth, budget, completeOwner: true)).OrderBy(x => x.TreePath, StringComparer.Ordinal))
             {
                 foreach (var part in item.Sections)
                 {
@@ -585,7 +662,7 @@ namespace TwinCatMcp.Engineering.Host
             internal string Label { get { return Clean ? "clean" : Verified ? "dirty" : "unknown"; } }
             internal bool Matches(DirtyEvidence current)
             {
-                return Verified && current.Verified && HostDirty == current.HostDirty && Unsaved.Length == current.Unsaved.Length &&
+                return Verified && current.Verified && HostDirty == current.HostDirty && Unsaved.Length > 0 && Unsaved.Length == current.Unsaved.Length &&
                     Unsaved.All(entry => current.Unsaved.Any(item => ReferenceEquals(entry.Identity, item.Identity) &&
                         entry.Moniker == item.Moniker && entry.TextDigest != null && entry.TextDigest == item.TextDigest));
             }

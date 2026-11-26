@@ -301,7 +301,9 @@ confirmation; Analysis must never cause a mutation popup or approval grant.
 
 ## Envelope
 
-Each provider request is a UTF-8 JSON object of at most 1 MiB. The pipe client allows up to 2 MiB for the authenticated frame, which embeds the payload as a JSON string.
+Provider requests and responses are UTF-8 JSON objects of at most 1 MiB each.
+Their authenticated frames embed the payload as a JSON string and can use up to
+2 MiB each.
 
 ```json
 {"protocolVersion":1,"sessionId":"uuid","operationId":"uuid","operation":"build.start","expected":{"idePid":1,"ideStartedUtc":"2026-01-01T00:00:00Z","solutionFile":"C:\\example\\a.sln","projectFile":"C:\\example\\a.plcproj","contextEpoch":"1"},"arguments":{}}
@@ -391,7 +393,9 @@ open XML targets. Automation Interface IDs have the form
 file. Rows include `qualifiedName`, `kind`, `sections`, `sourceMode: "automationInterface"`,
 `applySupported: true`, `language: "ST"` and `treePath`. Every implementation must
 attest `IECLANGUAGE_ST` (value `1`). Graphical POUs and their members are excluded.
-Declaration-only DUTs, interfaces and GVLs are supported.
+Declaration-only DUTs, interfaces and GVLs are supported. An ST owner with
+unsupported or non-ST members returns `unsupported / mixed_language_owner_unsupported`
+on read, preview, apply, rollback and member creation.
 
 Automation Interface section text is normalized to LF and limited to 65,536
 UTF-16 units. Source responses are bounded to 1 MiB. Baseline and proposed
@@ -404,24 +408,34 @@ returns `conflict / unsaved_editor_changes`. An existing dirty flag is accepted
 only while the session's verified post-image and document evidence still match.
 A matching unsaved DTE document must expose a stable text observation for a
 second write, including rollback. The provider refuses a dirty open document
-whose independent text cannot be verified.
-Rollback checks the exact journaled post-image before restoring the pre-image.
+whose independent text cannot be verified. A refusal for dirty state before
+the setter leaves the preview or rollback journal available for a new operation
+ID after saving. Rollback checks the exact journaled post-image before restoring
+the pre-image.
 Results and provenance report `source: "automationInterface"` and
 `persistence: "mayPersistToDisk"`.
+
+The provider budgets 16,777,216 UTF-16 units per session for retained XML and
+Automation Interface preview and journal text. When a preview would exceed that budget, it returns
+`refused / source_session_memory_limit`. An attached-editor read-only preview that
+exceeds the response limit returns `refused / source_preview_too_large`.
 
 `source.create` accepts these fields.
 
 | Field | Rule |
 | --- | --- |
 | `parentPath` | Required caret-separated path. Standalone objects require the corresponding `POUs`, `DUTs` or `GVLs` folder or descendant folder. Members require an ST program or function block. |
-| `name` | Required IEC identifier matching `^[A-Za-z_][A-Za-z0-9_]{0,63}$`. Sibling names are unique without regard to case. |
+| `name` | Required non-reserved IEC identifier matching `^[A-Za-z_][A-Za-z0-9_]{0,63}$`. Sibling names are unique without regard to case. |
 | `kind` | `fb`, `prg`, `fun`, `method`, `action`, `property`, `dut_struct` or `gvl`. |
-| `returnType` | IEC type identifier required for `fun`, `method` and `property`. Omit for other kinds. |
+| `returnType` | IEC elementary type or non-reserved user-defined type identifier. Required for `fun` and `property`. Omit for void methods and other kinds. |
 | `access` | `PUBLIC`, `PRIVATE`, `PROTECTED` or `INTERNAL` for `method` and `property`. The default is `PUBLIC`. |
 | `createGet`, `createSet` | Optional property-only booleans. An omitted flag leaves that accessor absent. |
 | `declarationText` | Optional initial declaration, up to 65,536 UTF-16 units, normalized to LF. Actions have no declaration. |
 | `implementationText` | Optional initial implementation, up to 65,536 UTF-16 units, normalized to LF. Properties, DUT structs and GVLs have no implementation. |
 | `approvalExpiresUtc` | Required future UTC timestamp within two minutes. The MCP tool supplies it. |
+
+The creation checks reserve IEC and TwinCAT keywords without regard to case,
+including [TwinCAT keywords and export identifiers](https://infosys.beckhoff.com/content/1033/tc3_plc_intro/2529971595.html).
 
 Apply, rollback and creation use the existing `ApprovalRequest` with the operation,
 bound context, target, expiry, exact request JSON and request digest. Apply and
@@ -432,8 +446,11 @@ normalized text and effective defaults. `BaselineDigest` hashes the empty string
 `ProposedDigest` hashes the canonical creation JSON. `PreviewId` and `JournalId`
 are null for creation.
 
-After approval, the provider checks the parent and duplicate name again before
-`CreateChild`, creates the selected accessors, and verifies the initial sections.
+The provider checks the parent and duplicate name before approval and again
+before `CreateChild`. Member owners and standalone destinations must be inside
+the PLC project directory. An existing file or directory at a standalone
+destination returns `conflict / target_file_already_exists`. The provider creates
+the selected accessors and verifies the initial sections.
 TwinCAT writes the object file or modifies the owning POU file and leaves project
 changes pending save. Success reports `persistence: "fileWrittenProjectPendingSave"`
 and the created target metadata. An unknown outcome can represent partial
@@ -601,6 +618,7 @@ the same transcript with domain `request` followed by LF and lowercase SHA-256
 of the UTF-8 request string. The response is exactly
 `{response:<provider JSON string>,proof}`, signed in the same way with domain
 `response` and the response string's digest. Proof comparisons are constant
-time. No secret is included in frames. Encoded request, response and handshake
-frames are capped at 256 KiB, 512 KiB and 4 KiB respectively. Authentication
-failure closes the connection; no dispatch is retried after a timeout.
+time. No secret is included in frames. Provider request and response payloads
+are capped at 1 MiB each. The authenticated request and response frames are
+capped at 2 MiB each. Handshake frames are capped at 4 KiB. Authentication
+failure closes the connection. A timeout never triggers another dispatch.

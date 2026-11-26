@@ -41,13 +41,34 @@ const rollbackInput = sourceApprovalInput.extend({ journalId: uuid }).strict();
 const journalInput = z.object({ journalId: uuid }).strict();
 const sourceTargetsInput = z.object({ moniker: canonicalPath.optional() }).strict();
 const iecIdentifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/);
+// Keep these IEC and TwinCAT keywords aligned with AutomationSourceCreation.
+const iecElementaryTypes = new Set(`BIT BOOL BYTE WORD DWORD LWORD SINT USINT INT UINT DINT UDINT LINT ULINT REAL LREAL
+STRING WSTRING TIME LTIME DATE DATE_AND_TIME DT TIME_OF_DAY TOD PVOID UXINT XINT XWORD
+LDATE LDATE_AND_TIME LDT LTIME_OF_DAY LTOD`.trim().split(/\s+/));
+const iecKeywords = new Set([...iecElementaryTypes, ...`ABS ABSTRACT ACOS ACTION ADD ADR AND ANDN ANY ANY_BIT ANY_DATE ANY_DERIVED ANY_ELEMENTARY ANY_INT
+ANY_MAGNITUDE ANY_NUM ANY_REAL ANY_SIGNED ANY_STRING ANY_UNSIGNED ARRAY ASIN AT ATAN BITADR BY
+CAL CALC CALCN CASE CLASS CONFIGURATION CONSTANT CONTINUE COS CYCLE DELETE DIV DO ELSE ELSIF
+END_ACTION END_CASE END_CLASS END_CONFIGURATION END_FOR END_FUNCTION END_FUNCTION_BLOCK
+END_IF END_INTERFACE END_METHOD END_NAMESPACE END_PROGRAM END_PROPERTY END_REPEAT END_RESOURCE
+END_STEP END_STRUCT END_TRANSITION END_TYPE END_UNION END_VAR END_WHILE EQ EXIT EXP EXPT
+EXTENDS FALSE FINAL FOR FUNCTION FUNCTION_BLOCK GE GT IF IMPLEMENTS INDEXOF INITIAL_STEP
+INTERFACE INTERNAL JMP JMPC JMPCN LD LDN LE LN LOG LT MAX METHOD MIN MOD MOVE MUL MUX NAMESPACE
+NE NEW NON_RETAIN NOT NULL OF ON OR ORN OVERRIDE PARAMS PERSISTENT POINTER PRIVATE PROGRAM
+PROPERTY PROTECTED PUBLIC R READ_ONLY READ_WRITE REFERENCE REPEAT RESOURCE RET RETAIN RETC
+RETCN RETURN ROL ROR S SEL SHL SHR SIN SIZEOF SQRT ST STEP STN STRUCT SUB SUPER TAN TASK
+THEN THIS TO TRANSITION TRUE TRUNC TYPE UNION UNTIL VAR VAR_ACCESS VAR_CONFIG VAR_EXTERNAL
+VAR_GLOBAL VAR_INST VAR_IN_OUT VAR_INPUT VAR_OUTPUT VAR_STAT VAR_TEMP WHILE WITH XOR XORN
+__CATCH __DELETE __ENDTRY __FINALLY __ISVALIDREF __NEW __QUERYINTERFACE __QUERYPOINTER __TRY __UXINT __XINT __XWORD`.trim().split(/\s+/)]);
 const parentPath = z.string().min(1).max(512).regex(/^[^^\\/:\u0000-\u001f\u007f-\u009f|]+(?:\^[^^\\/:\u0000-\u001f\u007f-\u009f|]+)*$/)
   .refine((value) => value.split("^").every((part) => part === part.trim() && part !== "." && part !== ".."));
 const createInput = z.object({
   parentPath: parentPath.describe("Relative path in the bound PLC tree, with ^ between segments."),
-  name: iecIdentifier,
+  name: iecIdentifier.refine((value) => !iecKeywords.has(value.toUpperCase()), "Use a non-reserved IEC identifier.")
+    .describe("Non-reserved IEC identifier."),
   kind: z.enum(["fb", "prg", "fun", "method", "action", "property", "dut_struct", "gvl"]),
-  returnType: iecIdentifier.optional().describe("Required for fun, method and property. Omit for other kinds."),
+  returnType: iecIdentifier.refine((value) => !iecKeywords.has(value.toUpperCase()) || iecElementaryTypes.has(value.toUpperCase()),
+    "Use an IEC elementary type or a non-reserved type identifier.")
+    .optional().describe("IEC elementary type or user-defined type identifier. Required for fun and property, optional for method. Omit for other kinds."),
   access: z.enum(["PUBLIC", "PRIVATE", "PROTECTED", "INTERNAL"]).optional().describe("Method or property access. The provider defaults to PUBLIC."),
   createGet: z.boolean().optional().describe("Create the property Get accessor."),
   createSet: z.boolean().optional().describe("Create the property Set accessor."),
@@ -56,7 +77,10 @@ const createInput = z.object({
 }).strict().superRefine((args, ctx) => {
   const issue = (field: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
   const memberWithType = args.kind === "method" || args.kind === "property";
-  if ((memberWithType || args.kind === "fun") !== (args.returnType !== undefined)) issue("returnType", "Return type is required only for fun, method and property.");
+  const requiresReturnType = args.kind === "fun" || args.kind === "property";
+  if (requiresReturnType && args.returnType === undefined) issue("returnType", "Return type is required for fun and property.");
+  if (!requiresReturnType && args.kind !== "method" && args.returnType !== undefined)
+    issue("returnType", "Return type is valid only for fun, method and property.");
   if (!memberWithType && args.access !== undefined) issue("access", "Access is valid only for method and property.");
   if (args.kind !== "property") {
     if (args.createGet !== undefined) issue("createGet", "Get is valid only for properties.");
