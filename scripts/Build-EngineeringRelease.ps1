@@ -1,10 +1,10 @@
 param(
-    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/engineering-release-0.5.10')
+    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/engineering-release-0.5.11')
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$version = '0.5.10'
+$version = '0.5.11'
 $tag = "engineering-v$version"
 
 function Invoke-Checked([string]$Command, [string[]]$Arguments) {
@@ -33,11 +33,7 @@ try {
     $sourceZip = Join-Path $output "$tag-sources.zip"
     $sourceTar = Join-Path $output 'native-source-tree.tar'
     Invoke-Checked git @('archive', '--format=zip', "--output=$sourceZip", $commit)
-    # git archive embeds the commit ID and timestamp. Preserve the 0.5.9
-    # native source pin only after verifying the release has the same tree.
-    $nativeSourceCommit = 'd635d7f6e8e794bb6490561aa4501b8db791cfcd'
-    Invoke-Checked git @('diff', '--quiet', $nativeSourceCommit, $commit, '--', 'native/Engineering.Host')
-    Invoke-Checked git @('archive', '--format=tar', "--output=$sourceTar", $nativeSourceCommit, 'native/Engineering.Host')
+    Invoke-Checked git @('archive', '--format=tar', "--output=$sourceTar", $commit, 'native/Engineering.Host')
     $sourceDigest = Get-Sha256 $sourceTar
     $snapshot = Join-Path $output 'source-work'
     Expand-Archive -LiteralPath $sourceZip -DestinationPath $snapshot

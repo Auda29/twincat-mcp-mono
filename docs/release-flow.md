@@ -1,20 +1,17 @@
 # Release Flow
 
-## Engineering 0.5.10 native approval timeout
-
-The client pipe allows 125 seconds for approval-bearing build, source apply,
-source rollback, and source create requests. All other MCP dispatches use
-30 seconds. The Build (9), Editor (16), and Debug (11) catalogs match 0.5.9 byte
-for byte.
+## Engineering 0.5.11 release receipt alignment
 
 Build from a clean, committed checkout with `scripts/Build-EngineeringRelease.ps1`.
-The builder verifies the native host tree against the 0.5.9 source commit and
-uses that commit's native archive for `module.sourceTreeSha256` because Git
-includes commit metadata in the archive. The source ZIP, compiled helper, and
-`sourceCommit` in the receipt come from the 0.5.10 release commit.
+The builder hashes `git archive --format=tar <release-commit> native/Engineering.Host`
+for `receipt.module.sourceTreeSha256`. Git includes commit metadata in the archive,
+so consumers must use the commit recorded in `sourceCommit`.
+
+Engineering 0.5.11 retains the 0.5.10 runtime behavior and native host source.
+The Build (9), Editor (16), and Debug (11) catalogs match 0.5.10 byte for byte.
 
 Pin the schema 2 receipt and each downloaded asset from the
-[0.5.10 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.10).
+[0.5.11 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.11).
 Record the assembled Core/MCP runtime audit in the release notes.
 
 ## Historical Engineering 0.5.9 Automation Interface ST Editor
