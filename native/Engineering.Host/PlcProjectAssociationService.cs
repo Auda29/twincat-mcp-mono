@@ -276,7 +276,8 @@ namespace TwinCatMcp.Engineering.Host
             "EnvDTE.Windows", "EnvDTE.Window", "EnvDTE.OutputWindow", "EnvDTE.OutputWindowPanes",
             "EnvDTE.OutputWindowPane", "EnvDTE.TextDocument", "EnvDTE.TextPoint", "EnvDTE.EditPoint",
             "EnvDTE80.SolutionConfiguration2", "TCatSysManagerLib.ITcSysManager", "TCatSysManagerLib.ITcSmTreeItem",
-            "TCatSysManagerLib.ITcSysManager7", "TCatSysManagerLib.ITcConfigManager"
+            "TCatSysManagerLib.ITcSysManager7", "TCatSysManagerLib.ITcConfigManager",
+            "TCatSysManagerLib.ITcProjectRoot", "TCatSysManagerLib.ITcPlcDeclaration", "TCatSysManagerLib.ITcPlcImplementation"
         };
         private readonly Dictionary<string, Type> types = new Dictionary<string, Type>(StringComparer.Ordinal);
         private readonly Dictionary<string, string> errors = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -388,6 +389,15 @@ namespace TwinCatMcp.Engineering.Host
             if (candidates.Length == 0) throw new MissingMemberException();
             if (candidates.Length != 1) throw new AmbiguousMatchException();
             return candidates[0].GetValue(instance, BindingFlags.Default, null, arguments, CultureInfo.InvariantCulture);
+        }
+        internal static void SetString(Type contract, object instance, string member, string value)
+        {
+            var candidates = Contracts(contract).SelectMany(t => t.GetProperties(Members))
+                .Where(p => p.Name == member && p.PropertyType == typeof(string) && p.GetSetMethod() != null &&
+                    p.GetIndexParameters().Length == 0).Distinct().ToArray();
+            if (candidates.Length == 0) throw new MissingMemberException();
+            if (candidates.Length != 1) throw new AmbiguousMatchException();
+            candidates[0].SetValue(instance, value, BindingFlags.Default, null, null, CultureInfo.InvariantCulture);
         }
         internal static object Call(Type contract, object instance, string member, params object[] args)
         {

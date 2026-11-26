@@ -58,7 +58,7 @@ static class Checks
         b.Denied = true; Require(a.Read(() => true) == null);
         Require(VsTextBufferAdapter.TryCreate(new object()) == null);
         Require(VsTextBufferAdapter.TryCreate(new ProjectionBuffer()) == null);
-        b.Denied = false; b.Text = new string('a', 65537);
+        b.Denied = false; b.Text = new string('a', SourcePolicy.MaxBufferLength + 1);
         Require(a.Read(() => true) == null && a.CompareExchange(b.Text, "x", () => true) == SourceExchangeOutcome.Unsupported);
         Console.WriteLine("VsTextBuffer checks passed");
     }

@@ -70,7 +70,7 @@ namespace TwinCatMcp.Engineering.Host
         // Fail the whole observation if any object is unsupported or over limit.
         internal static List<XmlStTarget> TryTargets(string xml, string moniker)
         {
-            if (xml == null || xml.Length > 65536 || string.IsNullOrEmpty(moniker) || moniker.IndexOf('|') >= 0) return null;
+            if (xml == null || xml.Length > MaxXml || string.IsNullOrEmpty(moniker) || moniker.IndexOf('|') >= 0) return null;
             try {
                 XmlElement top;
                 if (ReadDocument(xml, out top) == null) return null;
@@ -89,7 +89,7 @@ namespace TwinCatMcp.Engineering.Host
                     foreach (var section in new[] { "declaration", "implementation" }) {
                         if (FindSingle(e, section == "declaration" ? "Declaration" : "Implementation") == null) continue;
                         var mapped = TryMap(xml, id, name, section);
-                        if (mapped == null || mapped.Text.Length > 16384) return null;
+                        if (mapped == null || mapped.Text.Length > MaxText) return null;
                         sections.Add(section);
                     }
                     if (sections.Count == 0) return null;

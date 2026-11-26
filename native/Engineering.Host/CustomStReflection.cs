@@ -49,6 +49,6 @@ namespace TwinCatMcp.Engineering.Host
         internal int ProjectHandle() { return (int)handleProperty.GetValue(Editor(), null); }
         internal bool IsDeclaration() { return (bool)declarationMethod.Invoke(sectionEditor, null); }
         internal object Document() { var d = documentMethod.Invoke(sectionEditor, new object[] { false }); return d != null && documentType.IsInstanceOfType(d) ? d : null; }
-        internal string Text(object document) { int length = (int)lengthProperty.GetValue(document, null); if (length < 0 || length > 16384) return null; var result = (string)textMethod.Invoke(document, new object[] { 0, length }); return result != null && result.Length == length ? result : null; }
+        internal string Text(object document) { int length = (int)lengthProperty.GetValue(document, null); if (length < 0 || length > 65536) return null; var result = (string)textMethod.Invoke(document, new object[] { 0, length }); return result != null && result.Length == length ? result : null; }
     }
 }

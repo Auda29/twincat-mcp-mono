@@ -60,7 +60,7 @@ describe("engineering child host handshake", () => {
         : JSON.parse(await readFile(join(releaseRuntime, "packages/mcp/package.json"), "utf8")).version;
       for (const [arg, count, catalog] of [
         ["--host-bootstrap-stdin", 9, "engineering-catalog.json"],
-        ["--host-editor-bootstrap-stdin", 15, "engineering-editor-catalog.json"],
+        ["--host-editor-bootstrap-stdin", 16, "engineering-editor-catalog.json"],
         ["--host-debug-bootstrap-stdin", 11, "engineering-debug-catalog.json"],
       ] as const) {
         const child = spawn(process.execPath, [entry, arg], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
@@ -90,7 +90,8 @@ describe("engineering child host handshake", () => {
           }
           const names = tools.map((tool: { name: string }) => tool.name);
           expect(new Set(names).size).toBe(count);
-          expect(names.includes("plc_source_apply")).toBe(count === 15);
+          expect(names.includes("plc_source_apply")).toBe(count === 16);
+          expect(names.includes("plc_source_create")).toBe(count === 16);
           expect(names.includes("plc_debug_read")).toBe(count === 11);
           expect(names).not.toContain("plc_write");
           expect(names).not.toContain("plc_read");

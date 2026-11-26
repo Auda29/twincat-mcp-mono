@@ -5,7 +5,7 @@ import { pathToFileURL } from "node:url";
 const [action, ...args] = process.argv.slice(2);
 if (action === "catalog") {
   const [repository, output, profile = "build"] = args;
-  const toolCounts = new Map([["build", 9], ["editor", 15], ["debug", 11]]);
+  const toolCounts = new Map([["build", 9], ["editor", 16], ["debug", 11]]);
   if (!toolCounts.has(profile)) throw new Error(`Unknown release catalog profile: ${profile}`);
   const { createLiveEngineeringToolDefinitions } = await import(pathToFileURL(join(repository, "packages/mcp/dist/engineering-live-tools.js")));
   const { zodToJsonSchema } = await import(pathToFileURL(join(repository, "node_modules/zod-to-json-schema/dist/esm/index.js")));
@@ -15,7 +15,7 @@ if (action === "catalog") {
   }, { enableDevelopmentSourceTools: profile === "editor", enableDebugTools: profile === "debug" });
   const names = definitions.map((tool) => tool.name);
   if (new Set(names).size !== toolCounts.get(profile) ||
-      names.filter((name) => name.startsWith("plc_source_")).length !== (profile === "editor" ? 6 : 0) ||
+      names.filter((name) => name.startsWith("plc_source_")).length !== (profile === "editor" ? 7 : 0) ||
       names.filter((name) => name.startsWith("plc_debug_")).length !== (profile === "debug" ? 2 : 0)) {
     throw new Error(`Unexpected release catalog for ${profile}`);
   }

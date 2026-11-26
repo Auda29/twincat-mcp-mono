@@ -61,7 +61,7 @@ namespace TwinCatMcp.Engineering.Host
         }
         private static SourceResult TargetsUnavailable() { return new SourceResult("unsupported", "source_targets_unavailable"); }
 
-        public SourceSnapshot Read(string contextIdentity, string objectId, string section)
+        public SourceSnapshot Read(string contextIdentity, string objectId, string section, bool isRollback = false)
         {
             try {
                 Target target;

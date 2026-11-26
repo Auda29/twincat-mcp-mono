@@ -10,7 +10,7 @@ namespace TwinCatMcp.Engineering.Host
     // This class does not discover documents or establish PLC object identity.
     internal sealed class VsTextBufferAdapter
     {
-        private const int Limit = 65536;
+        private const int Limit = SourcePolicy.MaxBufferLength;
         private readonly IVsTextBufferBackend backend;
         internal VsTextBufferAdapter(IVsTextBufferBackend backend) { this.backend = backend ?? throw new ArgumentNullException("backend"); }
 
@@ -138,7 +138,7 @@ namespace TwinCatMcp.Engineering.Host
             public bool Replace(int length, string replacement)
             { return (bool)editType.GetMethod("Replace", new[] { typeof(int), typeof(int), typeof(string) }).Invoke(edit, new object[] { 0, length, replacement }); }
             public bool HasFailedChanges { get { return (bool)editType.GetProperty("HasFailedChanges").GetValue(edit, null); } }
-            public string Apply() { return SnapshotText(bufferEditType.GetMethod("Apply", Type.EmptyTypes).Invoke(edit, null), snapshotType, 65536); }
+            public string Apply() { return SnapshotText(bufferEditType.GetMethod("Apply", Type.EmptyTypes).Invoke(edit, null), snapshotType, SourcePolicy.MaxBufferLength); }
             public void Dispose() { ((IDisposable)edit).Dispose(); }
         }
     }

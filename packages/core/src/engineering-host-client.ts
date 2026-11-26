@@ -5,8 +5,9 @@ import { TextDecoder } from "node:util";
 const HEX = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HANDSHAKE_LIMIT = 4096;
-const REQUEST_LIMIT = 256 * 1024;
-const RESPONSE_LIMIT = 512 * 1024;
+// The authenticated frame embeds a JSON payload as a JSON string.
+const PAYLOAD_LIMIT = 1024 * 1024;
+const FRAME_LIMIT = 2 * PAYLOAD_LIMIT;
 
 function exact(value: unknown, keys: string[]): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid host frame");
@@ -68,12 +69,13 @@ export class EngineeringHostClient {
 
   async dispatch(request: string): Promise<string> {
     if (this.#disposed) throw new Error("Host client disposed");
+    if (Buffer.byteLength(request, "utf8") > PAYLOAD_LIMIT) throw new Error("Host request too large");
     const socket = createConnection(this.#pipe);
     let pending = Buffer.alloc(0);
     let wake: (() => void) | undefined;
     let failure: Error | undefined;
     const signal = () => { const callback = wake; wake = undefined; callback?.(); };
-    socket.on("data", (chunk: Buffer) => { pending = Buffer.concat([pending, chunk]); if (pending.length > RESPONSE_LIMIT + 1) failure = new Error("Host frame too large"); signal(); });
+    socket.on("data", (chunk: Buffer) => { pending = Buffer.concat([pending, chunk]); if (pending.length > FRAME_LIMIT + 1) failure = new Error("Host frame too large"); signal(); });
     socket.on("error", () => { failure = new Error("Host connection failed"); signal(); });
     socket.on("end", () => { failure = new Error("Host connection closed"); signal(); });
     socket.on("close", () => { failure ??= new Error("Host connection closed"); signal(); });
@@ -110,9 +112,10 @@ export class EngineeringHostClient {
       send({ clientNonce, proof: proof("client", serverNonce, clientNonce) }, HANDSHAKE_LIMIT);
       const ack = exact(await read(HANDSHAKE_LIMIT), ["proof"]);
       verify(ack.proof, proof("server", serverNonce, clientNonce));
-      send({ protocolVersion: 1, request, proof: proof("request", serverNonce, clientNonce, request) }, REQUEST_LIMIT);
-      const response = exact(await read(RESPONSE_LIMIT), ["response", "proof"]);
+      send({ protocolVersion: 1, request, proof: proof("request", serverNonce, clientNonce, request) }, FRAME_LIMIT);
+      const response = exact(await read(FRAME_LIMIT), ["response", "proof"]);
       if (typeof response.response !== "string") throw new Error("Invalid host response");
+      if (Buffer.byteLength(response.response, "utf8") > PAYLOAD_LIMIT) throw new Error("Host response too large");
       verify(response.proof, proof("response", serverNonce, clientNonce, response.response));
       if (pending.length !== 0) throw new Error("Unexpected host data");
       return response.response;

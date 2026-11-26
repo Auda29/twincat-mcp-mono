@@ -93,7 +93,7 @@ static class Checks
                 File.WriteAllText(project, projectXml.Replace("</Project>", "<Target Name=\"Alter\" /></Project>"));
                 Require(Status(call(Guid.NewGuid(), "source.read", new { objectId = target, section = "implementation" })) == "refused", "Target rejected");
                 File.WriteAllText(project, projectXml);
-                Require(Status(call(Guid.NewGuid(), "source.preview", new { objectId = target, section = "implementation", proposedText = new string('x', 16385) })) == "refused", "section limit");
+                Require(Status(call(Guid.NewGuid(), "source.preview", new { objectId = target, section = "implementation", proposedText = new string('x', 65537) })) == "refused", "section limit");
                 Guid previewId = Guid.NewGuid();
                 var preview = call(previewId, "source.preview", new { objectId = target, section = "implementation", proposedText = "a := 2;" });
                 Require(Status(preview) == "succeeded", "preview: " + json.Serialize(preview));

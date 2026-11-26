@@ -14,7 +14,13 @@ const servers: ReturnType<typeof createServer>[] = [];
 afterEach(() => { for (const server of servers.splice(0)) server.close(); });
 
 describe("engineering host pipe authentication", () => {
-  it("authenticates both sides and the exact request and response", async () => {
+  it.each([
+    ['{"operation":"source.read"}', '{"status":"unsupported"}'],
+    [
+      JSON.stringify({ operation: "source.create", arguments: { declarationText: "\u0001".repeat(65536), implementationText: "\u0002".repeat(65536) } }),
+      JSON.stringify({ status: "succeeded", result: { beforeText: "\u0001".repeat(65536), proposedText: "\u0002".repeat(65536) } }),
+    ],
+  ])("authenticates both sides and the exact request and response (%#)", async (request, response) => {
     const endpoint = path();
     const server = createServer((socket) => {
       socket.write(JSON.stringify({ protocolVersion: 1, sessionId: session, serverNonce: nonce }) + "\n");
@@ -29,8 +35,8 @@ describe("engineering host pipe authentication", () => {
             expect(frame.proof).toBe(mac("client", client));
             socket.write(JSON.stringify({ proof: mac("server", client) }) + "\n");
           } else {
+            expect(frame.request).toBe(request);
             expect(frame.proof).toBe(mac("request", client, frame.request));
-            const response = '{"status":"unsupported"}';
             socket.end(JSON.stringify({ response, proof: mac("response", client, response) }) + "\n");
           }
         }
@@ -39,7 +45,7 @@ describe("engineering host pipe authentication", () => {
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(endpoint, resolve));
     const client = new EngineeringHostClient(endpoint, session, key);
-    await expect(client.dispatch('{"operation":"source.read"}')).resolves.toBe('{"status":"unsupported"}');
+    await expect(client.dispatch(request)).resolves.toBe(response);
     client.dispose();
   });
 

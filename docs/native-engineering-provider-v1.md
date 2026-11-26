@@ -10,16 +10,29 @@ present; the fifteen-tool development catalog requires trusted in-code
 `enableDevelopmentSourceTools:true` in those published artifacts. Native
 development factories remain opt-in host APIs.
 
-The unpublished Assistant integration can launch an owned child with the single
+The Assistant Editor profile can launch an owned child with the single
 argument `--host-editor-bootstrap-stdin`. It authenticates the same stdin
-bootstrap and pipe as `--host-bootstrap-stdin`, then exposes the six existing
-source definitions in addition to the nine build/session/diagnostic tools.
-Neither host mode connects to ADS. Catalog selection is not native authorization.
-Source mutations still require an applicable XML-buffer preview, exact document
-and baseline checks, and the host's separate approval. The attached normal
-TwinCAT ST editor still supports read-only preview.
+bootstrap and pipe as `--host-bootstrap-stdin`, then adds seven source tools
+to the nine build, session and diagnostic tools.
 
-The unpublished Debug child mode `--host-debug-bootstrap-stdin` exposes the
+- `plc_source_targets`
+- `plc_source_read`
+- `plc_source_preview`
+- `plc_source_apply`
+- `plc_source_rollback`
+- `plc_source_journal`
+- `plc_source_create`
+
+Build and Editor modes operate without ADS. The Editor profile supports
+Automation Interface ST editing and creation when the native host supplies the
+required callbacks and interop types. An eligible open XML buffer supports
+preview, apply and rollback. The attached TwinCAT ST editor view provides
+read-only previews. Apply and rollback require verified source images and a
+separate native approval. For `source.create`, the approval binds the exact
+request, target path and kind, expiry, and canonical creation JSON with
+normalized initial text and effective defaults.
+
+The Debug child mode `--host-debug-bootstrap-stdin` exposes the
 nine build/session/diagnostic tools plus `plc_debug_state` and
 `plc_debug_read`. It omits all source mutation tools. A Debug tool makes the
 internal `debug.context` request on the authenticated host channel with empty
@@ -220,7 +233,9 @@ at creation, retaining successes, nulls and failures for its lifetime:
   `EnvDTE.EditPoint`.
 - `EnvDTE80.SolutionConfiguration2`.
 - `TCatSysManagerLib.ITcSysManager`, `TCatSysManagerLib.ITcSmTreeItem`,
-  `TCatSysManagerLib.ITcSysManager7`, `TCatSysManagerLib.ITcConfigManager`.
+  `TCatSysManagerLib.ITcSysManager7`, `TCatSysManagerLib.ITcConfigManager`,
+  `TCatSysManagerLib.ITcProjectRoot`, `TCatSysManagerLib.ITcPlcDeclaration`,
+  and `TCatSysManagerLib.ITcPlcImplementation`.
 
 An accepted value is an actual nongeneric public interface Type with the exact
 ordinal FullName, from an assembly already execution-loaded before callback
@@ -299,7 +314,9 @@ confirmation; Analysis must never cause a mutation popup or approval grant.
 
 ## Envelope
 
-Each request is a UTF-8 JSON object of at most 256 KiB:
+Provider requests and responses are UTF-8 JSON objects of at most 1 MiB each.
+Their authenticated frames embed the payload as a JSON string and can use up to
+2 MiB each.
 
 ```json
 {"protocolVersion":1,"sessionId":"uuid","operationId":"uuid","operation":"build.start","expected":{"idePid":1,"ideStartedUtc":"2026-01-01T00:00:00Z","solutionFile":"C:\\example\\a.sln","projectFile":"C:\\example\\a.plcproj","contextEpoch":"1"},"arguments":{}}
@@ -309,15 +326,16 @@ The response includes `protocolVersion`, `sessionId`, `operationId`, `status`
 and `provenance`; optional `output`, `diagnostics`, `result` and `error` are
 bounded. Status is one of `accepted`, `running`, `succeeded`, `failed`,
 `refused`, `conflict`, `cancelled`, `unknown`, or `unsupported`. Provenance
-includes the observed context, observation time and source (`liveBuffer`,
-`savedFile`, or `unknown`), plus dirty state (`clean`, `dirty`, or `unknown`).
+includes the observed context, time and source. Source values include `liveBuffer`,
+`liveAttachedDocument`, `automationInterface`, `savedFile` and `unknown`. Automation
+Interface provenance reports persistence. Dirty state is `clean`, `dirty` or `unknown`.
 Errors are sanitized and do not expose capability or approval material.
 
 Operations include `session.ping`, `session.describe`, `project.association`,
 `build.start`, `operation.get`, `operation.cancel`,
 `diagnostics.read`, `diagnostics.navigate`, `output.read`, `source.targets`, `source.read`, `source.preview`,
-`source.apply`, and `source.rollback`. `build.start`, `source.apply`, and
-`source.rollback` require explicit native approval. Read calls cannot trigger
+`source.apply`, `source.rollback`, `source.journal` and `source.create`.
+`build.start`, `source.apply`, `source.rollback` and `source.create` require explicit native approval. Read calls cannot trigger
 builds or mutation. `operation.get` and `operation.cancel` use a distinct
 `arguments.targetOperationId` UUID; cancel is not an Analysis read operation.
 Operations may be unsupported; a missing implementation
@@ -372,20 +390,108 @@ closed. This observation does not authorize a build or a source edit. It is
 conditional on the host's loaded Automation Interface and remains unverified
 against a live XAE instance.
 
-The following source contract is retained development functionality, not an
-active release capability. In an explicitly enabled development host,
-`source.preview` covers one existing ST object and one section. It records
-exact verified text, identity, baseline digest and proposed digest. Apply
-requires that exact preview and approval, verifies the current live buffer and
-baseline again atomically with mutation, and records a journal. Rollback is an
-explicit approved operation that checks the current text equals the journaled
-post-image before restoring the pre-image. Unknown buffer state, stale context,
-ambiguous identity or unsupported editor semantics must refuse mutation.
-Create, delete, multiple files, hardware and Safety changes are out of scope.
-No operation implicitly saves, switches configuration/platform, activates,
-downloads, logs in, runs, stops or forces values.
+### Editor profile source operations
 
-### Development-only live XML editor scope (inactive in release)
+With source callbacks and the authoritative interop types, the Editor profile
+resolves the bound PLC with `TIPC` and `ITcProjectRoot.NestedProject`.
+`session.describe` reports conditional read, preview, apply, rollback and creation.
+With both source adapters enabled, `sourceEditorKind` is
+`automationInterfaceAndOpenXmlBuffer`.
+
+`source.targets` accepts `{}` to list up to 512 project-wide targets. An optional
+canonical physical `moniker` filters results to that file, preferring verified
+open XML targets. Automation Interface IDs have the form
+`<canonicalPhysicalFile>|<treeRelativePath>`, for example
+`C:\plc\POUs\FB_Motor.TcPOU|POUs^FB_Motor^M_Run`. Members share the owning
+file. Rows include `qualifiedName`, `kind`, `sections`, `sourceMode: "automationInterface"`,
+`applySupported: true`, `language: "ST"` and `treePath`. Every implementation must
+attest `IECLANGUAGE_ST` (value `1`). Graphical POUs and their members are excluded.
+Declaration-only DUTs, interfaces and GVLs are supported. An ST owner with
+unsupported or non-ST members returns `unsupported / mixed_language_owner_unsupported`
+on read, preview, apply, rollback and member creation.
+
+Automation Interface section text is normalized to LF and limited to 65,536
+UTF-16 units. Source responses are bounded to 1 MiB. Baseline and proposed
+digests hash the normalized section text. The `projectRevision` hashes the
+length-prefixed association mapping digest and target ID. Apply compares the
+bound target, section baseline and owning object's source image, then reads
+back the exact proposed text. It checks both the authoritative dirty callback
+and matching DTE documents, including member monikers. Unexplained dirty state
+returns `conflict / unsaved_editor_changes`. An existing dirty flag is accepted
+only while the session's verified post-image and document evidence still match.
+A matching unsaved DTE document must expose a stable text observation for a
+second write, including rollback. A semicolon suffix can identify a known member
+only when the full moniker identifies no separate file on disk. Unrecognized
+suffixes mark the owner dirty without contributing text evidence.
+A verified pre-setter conflict leaves the preview or rollback journal available
+for a new operation ID once the exact baseline or post-image is restored.
+The original operation ID replays its conflict. An unknown outcome after
+submission keeps the claim. Rollback checks the exact journaled post-image
+before restoring the pre-image.
+Results and provenance report `source: "automationInterface"` and
+`persistence: "mayPersistToDisk"`.
+
+The provider shares a session budget of 16,777,216 UTF-16 units across XML and
+Automation Interface preview and journal images and serialized source replay
+responses, including attached read-only previews. If storing either a preview's
+images or its replay response would exceed the budget, the provider returns
+`refused / source_session_memory_limit` and retains no preview ID or images for
+that request. The 128 replay slots bound the small receipts, which can still
+record apply, rollback and create outcomes at the preview limit. Existing
+journals remain readable and usable for rollback. A preview exceeding the
+1 MiB transport response limit returns `refused / source_preview_too_large`.
+
+`source.create` accepts these fields.
+
+| Field | Rule |
+| --- | --- |
+| `parentPath` | Required caret-separated path. Standalone objects require the corresponding `POUs`, `DUTs` or `GVLs` folder or descendant folder. Members require an ST program or function block. |
+| `name` | Required non-reserved IEC identifier matching `^[A-Za-z_][A-Za-z0-9_]{0,63}$`. Sibling names are unique without regard to case. |
+| `kind` | `fb`, `prg`, `fun`, `method`, `action`, `property`, `dut_struct` or `gvl`. |
+| `returnType` | IEC elementary type or non-reserved user-defined type identifier. Required for `fun` and `property`. Omit for void methods and other kinds. |
+| `access` | `PUBLIC`, `PRIVATE`, `PROTECTED` or `INTERNAL` for `method` and `property`. The default is `PUBLIC`. |
+| `createGet`, `createSet` | Optional property-only booleans. An omitted flag leaves that accessor absent. |
+| `declarationText` | Optional initial declaration, up to 65,536 UTF-16 units, normalized to LF. Actions have no declaration. |
+| `implementationText` | Optional initial implementation, up to 65,536 UTF-16 units, normalized to LF. Properties, DUT structs and GVLs have no implementation. |
+| `approvalExpiresUtc` | Required future UTC timestamp within two minutes. The MCP tool supplies it. |
+
+The creation checks reserve IEC and TwinCAT keywords without regard to case,
+including [TwinCAT keywords and export identifiers](https://infosys.beckhoff.com/content/1033/tc3_plc_intro/2529971595.html).
+
+Apply, rollback and creation use the existing `ApprovalRequest` with the operation,
+bound context, target, expiry, exact request JSON and request digest. Apply and
+rollback include the exact text images, digests and preview or journal IDs.
+For create, `TargetObjectId` is `parentPath + "^" + name`, `Section` is `kind`,
+`BeforeText` is empty, and `ProposedText` is the canonical creation JSON with
+normalized text and effective defaults. `BaselineDigest` hashes the empty string.
+`ProposedDigest` hashes the canonical creation JSON. `PreviewId` and `JournalId`
+are null for creation.
+
+The provider checks the parent and duplicate name before approval and again
+before `CreateChild`. Member owners and standalone destinations must be inside
+the PLC project directory. Windows final directory paths establish project
+membership and reparse points at or below the project root are rejected. For
+standalone objects, the provider uses a single canonical folder `FullPath` from
+Automation Interface XML. Otherwise, it requires an unlinked, project-relative
+`Folder` item or `Compile` path from the bound `.plcproj`, plus agreement from
+every readable standalone sibling path. The project XML is limited to 1 MiB
+and cannot use DTDs. Insufficient directory evidence returns
+`refused / creation_parent_path_unverified`. An existing file or directory at a
+standalone destination, including a case-insensitive name collision, returns
+`conflict / target_file_already_exists` for ordinary entries. The provider creates
+the selected accessors and verifies the initial sections.
+TwinCAT writes the object file or modifies the owning POU file and leaves project
+changes pending save. Success reports `persistence: "fileWrittenProjectPendingSave"`
+and the created target metadata. An unknown outcome can represent partial
+creation. Inspect the project tree before taking further action. The provider
+keeps operation IDs in its session replay cache and never retries a submission.
+
+Host integration supplies the three source interop types, accepts `source.create`
+in the native approval UI and supports the larger transport bounds. Build and
+Debug profiles leave both source callbacks null. Activation, download, online
+change, login, runtime writes, forcing, start, stop and deletion remain excluded.
+
+### Open XML editor scope
 
 `Create` exposes no editor access. `CreateWithEditorAccess` receives a trusted
 host callback for an exact canonical, already-open RDT moniker. The host must
@@ -401,7 +507,7 @@ bytes. It maps a unique existing POU or direct Method/Action GUID and exact
 qualified name to one CDATA declaration or ST implementation. It refuses
 properties, projection buffers, custom ST-only editor buffers, namespaces,
 unsupported XML metadata and dynamic project membership. Sections are limited
-to 16,384 UTF-16 code units and the full buffer to 65,536 code units.
+to 65,536 UTF-16 code units and the full XML buffer to 2,097,152 code units.
 
 The source object ID is `<canonical .TcPOU path>|<lowercase GUID-D>|<qualifiedName>`.
 The provider operations are:
@@ -432,7 +538,7 @@ restart. A journal does not authorize rollback; rollback needs a new native
 approval and exact current post-image. Specialized TwinCAT editor compatibility
 and live IDE acceptance remain unverified.
 
-### Development-only attached ST reads and previews (inactive in release)
+### Attached ST reads and previews
 
 `CreateWithEditorViews` adds `Func<string,string,object> getSectionEditor` to
 the seven-argument `CreateWithHostAccess` factory. Arguments are the exact
@@ -450,16 +556,16 @@ GUID, pinned positive project handle and `IsDeclarationEditor()`, reads
 `GetTextDocument(false).GetText(0, Length)`, then rechecks view, editor,
 document, text, context, project revision and known dirty state. It never calls
 a text setter. A source may be dirty; its `.plcproj` must be known clean with
-verified static Compile membership. Text is bounded to 16,384 UTF-16 units.
+verified static Compile membership. Text is bounded to 65,536 UTF-16 units.
 
 `source.targets {moniker}` accepts the canonical physical `.TcPOU` filename.
-If the raw XML adapter cannot read it, persisted GUID/name metadata supplies
+When raw XML and Automation Interface discovery are unavailable, persisted GUID/name metadata supplies
 candidate IDs only. Each returned object and section must independently pass
 the attached-editor checks. Results contain `targets` with `objectId`,
 `qualifiedName`, `kind`, `sections` and `atomicWriteSupported:false`, plus
 `count`, `truncated:false`, `sourceMode:"customStReadOnly"`,
 `identitySource:"persistedObjectMetadataAndNativeView"`, `applySupported:false`,
-`source:"liveBuffer"`, `dirtyState` and `projectRevision`. Stale metadata that
+`source:"liveAttachedDocument"`, `dirtyState` and `projectRevision`. Stale metadata that
 cannot be matched to the current native view produces no supported target.
 
 For this mode, `source.read` returns live `text`. `source.preview` returns
@@ -468,7 +574,7 @@ changing the document. Both include `sourceMode:"customStReadOnly"`,
 `captureKind:"attachedTwinCatTextDocument"`, `documentDigest`,
 `proposedDocumentDigest` (null on read), `projectRevision`, `dirtyState`,
 `truncated:false`, `atomicWriteSupported:false` and `applySupported:false`.
-Provenance reports `liveBuffer` and the observed dirty state. No mutation-ready
+Provenance reports `liveAttachedDocument` and the observed dirty state. No mutation-ready
 preview ID or whole-buffer mutation digest is issued.
 
 Normal ST custom-editor apply/rollback remain unsupported. Installed metadata
@@ -541,6 +647,7 @@ the same transcript with domain `request` followed by LF and lowercase SHA-256
 of the UTF-8 request string. The response is exactly
 `{response:<provider JSON string>,proof}`, signed in the same way with domain
 `response` and the response string's digest. Proof comparisons are constant
-time. No secret is included in frames. Encoded request, response and handshake
-frames are capped at 256 KiB, 512 KiB and 4 KiB respectively. Authentication
-failure closes the connection; no dispatch is retried after a timeout.
+time. No secret is included in frames. Provider request and response payloads
+are capped at 1 MiB each. The authenticated request and response frames are
+capped at 2 MiB each. Handshake frames are capped at 4 KiB. Authentication
+failure closes the connection. A timeout never triggers another dispatch.
