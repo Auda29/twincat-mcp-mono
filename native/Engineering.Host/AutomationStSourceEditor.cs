@@ -184,6 +184,8 @@ namespace TwinCatMcp.Engineering.Host
                     return new SourceResult("conflict", "creation_parent_changed");
 
                 if (!request.IsMember) RequireAvailableFile(currentDestination);
+                if (!authorizationCurrent()) return new SourceResult("refused", "approval_expired");
+                if (!ContextMatches()) return new SourceResult("conflict", "creation_parent_changed");
                 submitted = true;
                 var item = CreateChild(currentParent, request.Name, request.ItemType, request.CreationInfo());
                 var target = MakeTarget(item, request.IsMember ? currentParent : null);
@@ -290,6 +292,19 @@ namespace TwinCatMcp.Engineering.Host
                     if (project == null || project.Name.LocalName != "Project") return false;
                     var ns = project.Name.Namespace;
                     if (ns != XNamespace.None && ns != "http://schemas.microsoft.com/developer/msbuild/2003") return false;
+                    foreach (var item in project.Descendants())
+                    {
+                        var kind = item.Name.LocalName;
+                        if (kind == "Link" && ReferencesFolder(item.Value, projectDirectory, candidate)) return false;
+                        if (kind != "Folder" && kind != "Compile") continue;
+                        if (item.Attribute("Remove") != null || item.Attribute("Update") != null || item.Attribute("Exclude") != null ||
+                            ReferencesFolder((string)item.Attribute("Link"), projectDirectory, candidate)) return false;
+
+                        var group = item.Parent;
+                        if ((group.Name != ns + "ItemGroup" || group.Parent != project ||
+                            group.Attribute("Condition") != null || item.Attribute("Condition") != null) &&
+                            ReferencesFolder((string)item.Attribute("Include"), projectDirectory, candidate)) return false;
+                    }
                     var folder = string.Join("\\", segments);
                     var matches = project.Elements(ns + "ItemGroup").Where(group => group.Attribute("Condition") == null)
                         .Elements().Select(item => AttestedFolder(item, folder)).Where(include => include != null)
@@ -298,6 +313,20 @@ namespace TwinCatMcp.Engineering.Host
                 }
             }
             catch { return false; }
+        }
+
+        private static bool ReferencesFolder(string paths, string projectDirectory, string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(paths)) return false;
+            // Project expressions and wildcards cannot establish which paths they affect without MSBuild evaluation.
+            if (paths.IndexOfAny(new[] { '$', '@', '%', '*', '?' }) >= 0) return true;
+            foreach (var path in paths.Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(projectDirectory, path.Trim().Replace('/', '\\'))).TrimEnd('\\');
+                if (SameFile(fullPath, candidate) || fullPath.StartsWith(candidate + "\\", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
 
         private static string AttestedFolder(XElement item, string folder)
@@ -691,11 +720,12 @@ namespace TwinCatMcp.Engineering.Host
                     var entry = InteropMemberAccess.Call(documents, collection, "Item", i);
                     var fullName = InteropMemberAccess.Get(document, entry, "FullName") as string;
                     bool exact = SameFile(fullName, path);
-                    bool member = fullName != null && fullName.Length > path.Length + 1 &&
+                    bool member = fullName != null && fullName.Length > path.Length &&
                         fullName.StartsWith(path + ";", StringComparison.OrdinalIgnoreCase) && !File.Exists(fullName);
                     if ((!exact && !member) || (bool)InteropMemberAccess.Get(document, entry, "Saved")) continue;
-                    if (member && !exact && memberMonikers == null) memberMonikers = MemberMonikers(owner);
-                    bool identifiesText = exact || memberMonikers.Contains(fullName.Substring(path.Length + 1));
+                    var suffix = exact ? "" : fullName.Substring(path.Length + 1);
+                    if (suffix.Length > 0 && memberMonikers == null) memberMonikers = MemberMonikers(owner);
+                    bool identifiesText = exact || (suffix.Length > 0 && memberMonikers.Contains(suffix));
                     unsaved.Add(new UnsavedDocument { Identity = entry, Moniker = fullName,
                         TextDigest = identifiesText ? ObserveDocumentText(entry) : null });
                 }

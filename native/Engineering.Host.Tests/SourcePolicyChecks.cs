@@ -51,6 +51,7 @@ internal static class SourcePolicyChecks
         Status(conflict, "conflict", "atomic final compare rejects race");
         Expect(conflict.ErrorCode == "source_exchange_conflict" && editor.Text == "concurrent edit" && editor.Writes == 2,
             "pre-setter conflict retains concurrent edit");
+        Expect(!conflict.Result.ContainsKey("journalOperationId"), "pre-setter apply conflict omits the released journal ID");
         Status(policy.GetJournal(racedApply), "refused", "pre-setter conflict leaves no journal");
         editor.BeforeExchange = null;
         editor.Text = "original";
@@ -60,7 +61,9 @@ internal static class SourcePolicyChecks
 
         var racedRollback = Id();
         editor.BeforeExchange = () => editor.Text = "concurrent edit";
-        Expect(policy.Rollback(racedRollback, retryApply).ErrorCode == "source_exchange_conflict", "final rollback comparison conflicts");
+        var rollbackConflict = policy.Rollback(racedRollback, retryApply);
+        Expect(rollbackConflict.ErrorCode == "source_exchange_conflict", "final rollback comparison conflicts");
+        Expect((string)rollbackConflict.Result["journalOperationId"] == retryApply, "pre-setter rollback conflict retains the original journal ID");
         Expect(!(bool)policy.GetJournal(retryApply).Result["rollbackSubmitted"], "pre-setter conflict releases rollback claim");
         editor.BeforeExchange = null;
         editor.Text = "raced";

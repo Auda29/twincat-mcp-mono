@@ -335,11 +335,13 @@ namespace TwinCatMcp.Engineering.Host
                 outcome == SourceExchangeOutcome.Unsupported ? "unsupported" : "unknown";
             if (outcome != SourceExchangeOutcome.Conflict) completed(status, request.VerifiedPostStateDigest);
             var error = status == "succeeded" ? null : "source_exchange_" + status;
-            return new SourceResult(status, error, WithSource(new Dictionary<string, object> {
-                { "journalOperationId", preview.JournalId ?? operationId },
+            var result = new Dictionary<string, object> {
                 { "baselineDigest", Digest(preview.BeforeBuffer) }, { "proposedDigest", Digest(preview.AfterBuffer) },
                 { "sectionBaselineDigest", Digest(preview.Before) }, { "sectionProposedDigest", Digest(preview.After) }
-            }, xmlSource: status == "succeeded" ? "liveBuffer" : "unknown"));
+            };
+            if (outcome != SourceExchangeOutcome.Conflict || preview.JournalId != null)
+                result.Add("journalOperationId", preview.JournalId ?? operationId);
+            return new SourceResult(status, error, WithSource(result, xmlSource: status == "succeeded" ? "liveBuffer" : "unknown"));
         }
 
         private Dictionary<string, object> WithSource(Dictionary<string, object> result, bool includeXml = true, string xmlSource = "liveBuffer")

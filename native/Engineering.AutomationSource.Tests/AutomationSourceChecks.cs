@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -175,7 +176,10 @@ internal sealed class AutomationSourceChecks : IDisposable
         document.FullName = main.PhysicalFile;
         Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
         Expect(approvals.Count == 0, "The exact physical moniker with a semicolon also refuses before approval");
-        document.FullName += ";Run";
+        document.FullName += ";";
+        Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
+        Expect(dirtyPaths.Count == 0 && approvals.Count == 0, "A bare semicolon moniker refuses before approval with a clean host");
+        document.FullName += "Run";
         Clean();
         dirtyPaths.Add(main.PhysicalFile);
         Status(Call("source.apply", ApplyArgs(p)), "conflict", "unsaved_editor_changes");
@@ -432,7 +436,23 @@ internal sealed class AutomationSourceChecks : IDisposable
             File.WriteAllText(context.ProjectFile, "<Project><ItemGroup><Folder Include='GVLs'/></ItemGroup></Project>" + new string(' ', 1024 * 1024));
             Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
 
-            const string folderProject = "<Project xmlns='http://schemas.microsoft.com/developer/msbuild/2003'><ItemGroup><Folder Include='gvls\\'/></ItemGroup></Project>";
+            const string attestedFolder = "<ItemGroup><Folder Include='GVLs'/></ItemGroup>";
+            foreach (var item in new[] {
+                "<ItemGroup><Folder Remove='GVLs'/></ItemGroup>",
+                "<ItemGroup><Folder Update='GVLs'><Name>Other</Name></Folder></ItemGroup>",
+                "<Target Name='Modify'><ItemGroup><Compile Include='Other.TcGVL' Exclude='Unrelated.TcGVL'/></ItemGroup></Target>",
+                "<ItemGroup Condition='false'><Folder Include='GVLs'/></ItemGroup>",
+                "<ItemGroup><Compile Include='./GVLs/Globals.TcGVL' Condition='false'/></ItemGroup>",
+                "<ItemGroup><Compile Include='Other/Globals.TcGVL'><Link>GVLs/Globals.TcGVL</Link></Compile></ItemGroup>"
+            })
+            {
+                File.WriteAllText(context.ProjectFile, "<Project>" + attestedFolder + item + "</Project>");
+                Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
+            }
+
+            const string folderProject = "<Project xmlns='http://schemas.microsoft.com/developer/msbuild/2003'><ItemGroup><Folder Include='gvls\\'/></ItemGroup>" +
+                "<Import Project='Beckhoff.targets'/><PropertyGroup Condition='false'><Mode>Debug</Mode></PropertyGroup>" +
+                "<ItemGroup Condition='false'><Compile Include='Other/Globals.TcGVL'/></ItemGroup></Project>";
             File.WriteAllText(context.ProjectFile, folderProject);
             var sibling = gvls.Children.Single();
             var siblingPath = sibling.PhysicalFile;
@@ -618,6 +638,23 @@ internal sealed class AutomationSourceChecks : IDisposable
         Expect(pous.CreateCount == creations, "Unknown creation must not resubmit");
     }
 
+    private void CreationApprovalExpiresBeforeSubmission()
+    {
+        Status(Call("source.targets", new { }), "succeeded");
+        // Inject authorization at the editor boundary to exercise expiry without depending on the wall clock.
+        const BindingFlags instance = BindingFlags.Instance | BindingFlags.NonPublic;
+        var editor = provider.GetType().GetField("automationEditor", instance).GetValue(provider);
+        var create = editor.GetType().GetMethod("Create", instance);
+        var parse = create.GetParameters()[0].ParameterType.GetMethod("Parse", BindingFlags.Static | BindingFlags.NonPublic);
+        var request = parse.Invoke(null, new object[] { CreateArgs("POUs", "ExpiredBeforeSubmission", "fb") });
+        int authorizationChecks = 0;
+        var result = create.Invoke(editor, new object[] { request, (Func<bool>)(() => true), (Func<bool>)(() => ++authorizationChecks < 3) });
+        var resultType = result.GetType();
+        Expect((string)resultType.GetProperty("Status", instance).GetValue(result) == "refused" &&
+            (string)resultType.GetProperty("ErrorCode", instance).GetValue(result) == "approval_expired" && pous.CreateCount == 0,
+            "Expiry on the final authorization check refuses before CreateChild");
+    }
+
     public static int Main()
     {
         using (var fixture = new AutomationSourceChecks())
@@ -630,6 +667,7 @@ internal sealed class AutomationSourceChecks : IDisposable
         using (var fixture = new AutomationSourceChecks()) fixture.PreviewReplayBudget();
         using (var fixture = new AutomationSourceChecks()) fixture.MixedOwner();
         using (var fixture = new AutomationSourceChecks()) fixture.Create();
+        using (var fixture = new AutomationSourceChecks()) fixture.CreationApprovalExpiresBeforeSubmission();
         using (var fixture = new AutomationSourceChecks()) fixture.CreationDiskBoundary();
         using (var fixture = new AutomationSourceChecks(nestedProjectDirectory: true)) fixture.CaseSensitiveCreationBoundary();
         using (var disabled = new AutomationSourceChecks(enable: false))
