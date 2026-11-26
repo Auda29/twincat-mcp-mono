@@ -2,10 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Web.Script.Serialization;
 using System.Xml;
 using System.Xml.Linq;
+using Microsoft.Win32.SafeHandles;
 
 namespace TwinCatMcp.Engineering.Host
 {
@@ -103,7 +105,7 @@ namespace TwinCatMcp.Engineering.Host
             if (target == null || !target.Sections.Contains(section)) return null;
             var state = CaptureSource(target, section);
             var stateDigest = state.Digest;
-            var dirt = ObserveDirty(target.PhysicalFile);
+            var dirt = ObserveDirty(target.Owner);
             RequireContext();
             return new SourceSnapshot {
                 ContextIdentity = context, ObjectId = objectId, Section = section, Text = state.Text, BufferText = state.Text,
@@ -127,7 +129,7 @@ namespace TwinCatMcp.Engineering.Host
                     !ReferenceEquals(target.Item, request.BufferIdentity) || Revision(binding, target) != request.ProjectRevision)
                     return SourceExchangeOutcome.Conflict;
                 bool xmlOpen = HasXmlBuffer(target.PhysicalFile);
-                var dirt = ObserveDirty(target.PhysicalFile);
+                var dirt = ObserveDirty(target.Owner);
                 var state = CaptureSource(target, request.Section);
                 var stateDigest = state.Digest;
                 if (xmlOpen || !CanWrite(target, dirt, stateDigest, request.IsRollback))
@@ -148,7 +150,7 @@ namespace TwinCatMcp.Engineering.Host
                 if (postDigest != expectedPost || !ContextMatches()) return SourceExchangeOutcome.Unknown;
 
                 request.VerifiedPostStateDigest = postDigest;
-                var postDirty = ObserveDirty(target.PhysicalFile);
+                var postDirty = ObserveDirty(target.Owner);
                 if (!ContextMatches()) return SourceExchangeOutcome.Unknown;
                 if (postDirty.Verified)
                     owned[target.PhysicalFile] = new OwnedState { Digest = postDigest, Owner = target.Owner.Item, Dirty = postDirty,
@@ -177,7 +179,7 @@ namespace TwinCatMcp.Engineering.Host
                 var current = Resolve();
                 var currentParent = ValidateCreationParent(current, request, out var currentDestination);
                 if (binding.MappingDigest != current.MappingDigest || !ReferenceEquals(parent.Item, currentParent.Item) ||
-                    !SameFile(destination, currentDestination) || parentImage != CreationParentImage(currentParent, request) ||
+                    !string.Equals(destination, currentDestination, StringComparison.Ordinal) || parentImage != CreationParentImage(currentParent, request) ||
                     !authorizationCurrent() || !ContextMatches())
                     return new SourceResult("conflict", "creation_parent_changed");
 
@@ -186,6 +188,11 @@ namespace TwinCatMcp.Engineering.Host
                 var item = CreateChild(currentParent, request.Name, request.ItemType, request.CreationInfo());
                 var target = MakeTarget(item, request.IsMember ? currentParent : null);
                 if (target == null || !SameFile(target.PhysicalFile, currentDestination) || !ContextMatches()) return UnknownCreation();
+                var projectDirectory = Path.GetDirectoryName(bound.ProjectFile);
+                RequireProjectDescendant(projectDirectory, target.PhysicalFile);
+                if (!string.Equals(target.PhysicalFile, currentDestination, StringComparison.Ordinal) &&
+                    !string.Equals(FinalPath(target.PhysicalFile), FinalPath(currentDestination), StringComparison.Ordinal))
+                    return UnknownCreation();
                 if (request.CreateGet) CreateAccessor(target, "Get", 613, request.Access, authorizationCurrent);
                 if (request.CreateSet) CreateAccessor(target, "Set", 614, request.Access, authorizationCurrent);
                 WriteInitial(target, "declaration", request.Declaration, authorizationCurrent);
@@ -229,10 +236,13 @@ namespace TwinCatMcp.Engineering.Host
             else
             {
                 if (parent.Type != PlcFolder) throw new PlcProjectAssociationException("refused", "invalid_creation_parent_kind");
-                var directory = PhysicalFile(parent, Path.Combine(projectDirectory, Path.Combine(segments)));
+                var directory = CreationDirectory(parent, projectDirectory, segments);
                 RequireProjectDescendant(projectDirectory, directory);
+                var attributes = ExistingAttributes(directory);
+                if (attributes.HasValue) RequireOrdinaryDirectory(attributes);
                 var extension = request.ItemType == 606 ? ".TcDUT" : request.ItemType == 615 ? ".TcGVL" : ".TcPOU";
                 destination = Path.Combine(directory, request.Name + extension);
+                RequireProjectDescendant(projectDirectory, destination);
             }
 
             if (Children(parent).Any(child => SameFile(child.Name, request.Name)))
@@ -240,26 +250,157 @@ namespace TwinCatMcp.Engineering.Host
             return parent;
         }
 
+        private string CreationDirectory(Target parent, string projectDirectory, string[] segments)
+        {
+            var reported = ReadPhysicalFile(parent);
+            if (reported != null) return reported;
+
+            var candidate = Path.Combine(projectDirectory, Path.Combine(segments));
+            if (ProjectAttestsFolder(projectDirectory, candidate, segments))
+            {
+                var siblings = Children(parent).Where(child => child.Type != PlcFolder && !IsMember(child.Type));
+                if (siblings.Select(ReadPhysicalFile).Where(file => file != null)
+                    .All(file => SameDirectory(candidate, Path.GetDirectoryName(file))))
+                    return candidate;
+            }
+            throw new PlcProjectAssociationException("refused", "creation_parent_path_unverified");
+        }
+
+        private string ReadPhysicalFile(Target item)
+        {
+            RequireContext();
+            try { return PhysicalFile(item); }
+            catch { return null; }
+        }
+
+        private bool ProjectAttestsFolder(string projectDirectory, string candidate, string[] segments)
+        {
+            try
+            {
+                RequireProjectDescendant(projectDirectory, bound.ProjectFile);
+                byte[] bytes;
+                using (var file = File.OpenRead(bound.ProjectFile))
+                using (var binary = new BinaryReader(file))
+                    bytes = binary.ReadBytes(MaxXml + 1);
+                if (bytes.Length > MaxXml) return false;
+                using (var reader = XmlReader.Create(new MemoryStream(bytes, writable: false),
+                    new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXml }))
+                {
+                    var project = XDocument.Load(reader).Root;
+                    if (project == null || project.Name.LocalName != "Project") return false;
+                    var ns = project.Name.Namespace;
+                    if (ns != XNamespace.None && ns != "http://schemas.microsoft.com/developer/msbuild/2003") return false;
+                    var folder = string.Join("\\", segments);
+                    var matches = project.Elements(ns + "ItemGroup").Where(group => group.Attribute("Condition") == null)
+                        .Elements().Select(item => AttestedFolder(item, folder)).Where(include => include != null)
+                        .Distinct(StringComparer.Ordinal).ToArray();
+                    return matches.Length > 0 && matches.All(include => SameDirectory(candidate, Path.Combine(projectDirectory, include)));
+                }
+            }
+            catch { return false; }
+        }
+
+        private static string AttestedFolder(XElement item, string folder)
+        {
+            var kind = item.Name.LocalName;
+            if (item.Name.Namespace != item.Parent.Name.Namespace || (kind != "Folder" && kind != "Compile") ||
+                item.Attribute("Condition") != null || item.Attribute("Link") != null ||
+                item.Elements().Any(element => element.Name.LocalName.Equals("Link", StringComparison.OrdinalIgnoreCase))) return null;
+            var include = ((string)item.Attribute("Include"))?.Replace('/', '\\');
+            if (string.IsNullOrEmpty(include) || Path.IsPathRooted(include) || include.IndexOfAny(Path.GetInvalidPathChars()) >= 0 ||
+                include.IndexOfAny(new[] { ':', '*', '?', ';', '$', '@', '%' }) >= 0) return null;
+            if (kind == "Folder" && include.EndsWith("\\", StringComparison.Ordinal))
+                include = include.Substring(0, include.Length - 1);
+            if (include.Split('\\').Any(segment => segment.Length == 0 || segment == "." || segment == ".." ||
+                segment.EndsWith(".", StringComparison.Ordinal) || segment.Trim() != segment)) return null;
+            if (kind == "Folder") return SameFile(include, folder) ? include : null;
+            return include.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase) ? include.Substring(0, folder.Length) : null;
+        }
+
+        private static bool SameDirectory(string left, string right)
+        {
+            if (string.Equals(left, right, StringComparison.Ordinal)) return true;
+            if (!SameFile(left, right) || !Directory.Exists(left) || !Directory.Exists(right)) return false;
+            try { return string.Equals(FinalPath(left), FinalPath(right), StringComparison.Ordinal); }
+            catch (PlcProjectAssociationException) { return false; }
+        }
+
         private static void RequireProjectDescendant(string projectDirectory, string path)
         {
-            var prefix = Path.GetFullPath(projectDirectory).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var root = Path.GetFullPath(projectDirectory);
+            var separator = Path.DirectorySeparatorChar;
+            var prefix = root.TrimEnd(separator) + separator;
             if (!CanonicalFile(path) || path.Length <= prefix.Length || !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                throw new PlcProjectAssociationException("refused", "creation_path_outside_project");
+                throw OutsideProject();
 
-            // A linked folder or file beneath the project can still redirect a write outside it.
-            var current = prefix;
-            foreach (var segment in path.Substring(prefix.Length).Split(Path.DirectorySeparatorChar))
+            var rootAttributes = ExistingAttributes(root);
+            if (!rootAttributes.HasValue)
             {
-                current = Path.Combine(current, segment);
-                try
-                {
-                    if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
-                        throw new PlcProjectAssociationException("refused", "creation_path_outside_project");
-                }
-                catch (FileNotFoundException) { return; }
-                catch (DirectoryNotFoundException) { return; }
+                if (!path.StartsWith(prefix, StringComparison.Ordinal)) throw OutsideProject();
+                return;
+            }
+            RequireOrdinaryDirectory(rootAttributes);
+            var finalRoot = FinalPath(root);
+
+            // Use the candidate's spelling from the volume root onward. Its project
+            // prefix can resolve to a different entry on a case-sensitive parent.
+            var current = path.Substring(0, root.Length);
+            RequireOrdinaryDirectory(ExistingAttributes(current));
+            if (!string.Equals(FinalPath(current), finalRoot, StringComparison.Ordinal)) throw OutsideProject();
+
+            var deepest = current;
+            var segments = path.Substring(prefix.Length).Split(separator);
+            for (int i = 0; i < segments.Length; i++)
+            {
+                current = Path.Combine(current, segments[i]);
+                var attributes = ExistingAttributes(current);
+                if (!attributes.HasValue) break;
+                if ((attributes.Value & FileAttributes.ReparsePoint) != 0) throw OutsideProject();
+                if ((attributes.Value & FileAttributes.Directory) == 0 && i != segments.Length - 1) throw OutsideProject();
+                deepest = current;
+            }
+            var finalAncestor = FinalPath(deepest);
+            if (!string.Equals(finalAncestor, finalRoot, StringComparison.Ordinal) &&
+                !finalAncestor.StartsWith(finalRoot + separator, StringComparison.Ordinal)) throw OutsideProject();
+        }
+
+        private static FileAttributes? ExistingAttributes(string path)
+        {
+            try { return File.GetAttributes(path); }
+            catch (FileNotFoundException) { return null; }
+            catch (DirectoryNotFoundException) { return null; }
+        }
+
+        private static void RequireOrdinaryDirectory(FileAttributes? attributes)
+        {
+            if (!attributes.HasValue || (attributes.Value & (FileAttributes.ReparsePoint | FileAttributes.Directory)) != FileAttributes.Directory)
+                throw OutsideProject();
+        }
+
+        private static PlcProjectAssociationException OutsideProject()
+        {
+            return new PlcProjectAssociationException("refused", "creation_path_outside_project");
+        }
+
+        private static string FinalPath(string path)
+        {
+            const uint shareReadWriteDelete = 7, openExisting = 3, backupSemantics = 0x02000000;
+            using (var handle = CreateFileW(path, 0, shareReadWriteDelete, IntPtr.Zero, openExisting, backupSemantics, IntPtr.Zero))
+            {
+                if (handle.IsInvalid) throw OutsideProject();
+                var finalPath = new StringBuilder(32768);
+                var length = GetFinalPathNameByHandleW(handle, finalPath, (uint)finalPath.Capacity, 0);
+                if (length == 0 || length >= finalPath.Capacity) throw OutsideProject();
+                return finalPath.ToString().TrimEnd(Path.DirectorySeparatorChar);
             }
         }
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern SafeFileHandle CreateFileW(string path, uint access, uint sharing, IntPtr security,
+            uint disposition, uint flags, IntPtr template);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+        private static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint capacity, uint flags);
 
         private static void RequireAvailableFile(string path)
         {
@@ -280,7 +421,7 @@ namespace TwinCatMcp.Engineering.Host
         {
             if (!request.IsMember) return null;
             var digest = CaptureSource(parent, "declaration").Digest;
-            if (!ObserveDirty(parent.PhysicalFile).Clean || HasXmlBuffer(parent.PhysicalFile))
+            if (!ObserveDirty(parent).Clean || HasXmlBuffer(parent.PhysicalFile))
                 throw new PlcProjectAssociationException("conflict", "unsaved_editor_changes");
             return digest;
         }
@@ -479,22 +620,34 @@ namespace TwinCatMcp.Engineering.Host
             }
         }
 
-        private string PhysicalFile(Target target, string fallback = null)
+        private string PhysicalFile(Target target)
         {
             var xml = InteropMemberAccess.Call(tree, target.Item, "ProduceXml", false) as string;
-            if (string.IsNullOrEmpty(xml)) return fallback;
+            if (string.IsNullOrEmpty(xml)) return null;
             if (xml.Length > MaxXml) return null;
             XDocument parsed;
             using (var reader = XmlReader.Create(new StringReader(xml), new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXml }))
                 parsed = XDocument.Load(reader);
             if (parsed.Root == null || parsed.Root.Name.LocalName != "TreeItem") return null;
-            var paths = parsed.Descendants().Where(e => e.Name.LocalName == "VSProperty").Select(FullPathProperty);
-            if (target.Type == PlcFolder)
-                paths = paths.Concat(parsed.Root.DescendantsAndSelf().Where(e => e.Name.LocalName == "FullPath").Select(e => e.Value))
-                    .Concat(parsed.Root.DescendantsAndSelf().Attributes().Where(a => a.Name.LocalName == "FullPath").Select(a => a.Value));
-            var distinctPaths = paths.Where(value => value != null).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            if (distinctPaths.Length == 0) return fallback;
+            var properties = parsed.Descendants().Where(e => e.Name.LocalName == "VSProperty");
+            var paths = target.Type == PlcFolder
+                ? properties.SelectMany(FolderPathProperties)
+                    .Concat(parsed.Root.DescendantsAndSelf().Where(e => e.Name.LocalName == "FullPath").Select(e => e.Value))
+                    .Concat(parsed.Root.DescendantsAndSelf().Attributes().Where(a => a.Name.LocalName == "FullPath").Select(a => a.Value))
+                : properties.Select(FullPathProperty);
+            var distinctPaths = paths.Where(value => value != null).Distinct(StringComparer.Ordinal).ToArray();
             return distinctPaths.Length == 1 && CanonicalFile(distinctPaths[0]) ? distinctPaths[0] : null;
+        }
+
+        private static IEnumerable<string> FolderPathProperties(XElement element)
+        {
+            bool named = element.Attributes().Any(a => (a.Name.LocalName == "Name" || a.Name.LocalName == "name") && a.Value == "FullPath") ||
+                element.Elements().Any(e => e.Name.LocalName == "Name" && e.Value == "FullPath");
+            if (!named) return Enumerable.Empty<string>();
+            var values = element.Attributes().Where(a => a.Name.LocalName == "Value" || a.Name.LocalName == "value").Select(a => a.Value)
+                .Concat(element.Elements().Where(e => e.Name.LocalName == "Value").Select(e => e.Value))
+                .Concat(element.Nodes().OfType<XText>().Select(text => text.Value).Where(text => !string.IsNullOrWhiteSpace(text)));
+            return values.DefaultIfEmpty("");
         }
 
         private static string FullPathProperty(XElement element)
@@ -520,8 +673,9 @@ namespace TwinCatMcp.Engineering.Host
 
         private bool HasXmlBuffer(string path) { return getXmlBuffer != null && VsTextBufferAdapter.TryCreate(getXmlBuffer(path)) != null; }
 
-        private DirtyEvidence ObserveDirty(string path)
+        private DirtyEvidence ObserveDirty(Target owner)
         {
+            var path = owner.PhysicalFile;
             try
             {
                 RequireContext();
@@ -530,19 +684,38 @@ namespace TwinCatMcp.Engineering.Host
                 var count = (int)InteropMemberAccess.Get(documents, collection, "Count");
                 if (count < 0 || count > 512) return new DirtyEvidence();
                 var unsaved = new List<UnsavedDocument>();
+                HashSet<string> memberMonikers = null;
                 for (int i = 1; i <= count; i++)
                 {
                     RequireContext();
                     var entry = InteropMemberAccess.Call(documents, collection, "Item", i);
                     var fullName = InteropMemberAccess.Get(document, entry, "FullName") as string;
-                    bool matches = SameFile(fullName, path) || (fullName != null && fullName.Length > path.Length &&
-                        fullName[path.Length] == ';' && SameFile(fullName.Substring(0, path.Length), path));
-                    if (matches && !(bool)InteropMemberAccess.Get(document, entry, "Saved"))
-                        unsaved.Add(new UnsavedDocument { Identity = entry, Moniker = fullName, TextDigest = ObserveDocumentText(entry) });
+                    bool exact = SameFile(fullName, path);
+                    bool member = fullName != null && fullName.Length > path.Length + 1 &&
+                        fullName.StartsWith(path + ";", StringComparison.OrdinalIgnoreCase) && !File.Exists(fullName);
+                    if ((!exact && !member) || (bool)InteropMemberAccess.Get(document, entry, "Saved")) continue;
+                    if (member && !exact && memberMonikers == null) memberMonikers = MemberMonikers(owner);
+                    bool identifiesText = exact || memberMonikers.Contains(fullName.Substring(path.Length + 1));
+                    unsaved.Add(new UnsavedDocument { Identity = entry, Moniker = fullName,
+                        TextDigest = identifiesText ? ObserveDocumentText(entry) : null });
                 }
                 return new DirtyEvidence { HostDirty = dirty, Unsaved = unsaved.ToArray() };
             }
             catch { return new DirtyEvidence(); }
+        }
+
+        private HashSet<string> MemberMonikers(Target owner)
+        {
+            var monikers = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in Enumerate(owner, owner, owner.Depth, new VisitBudget(), completeOwner: true))
+            {
+                monikers.Add(member.Name);
+                monikers.Add(member.TreePath);
+                var relative = member.TreePath.Substring(owner.TreePath.Length + 1);
+                monikers.Add(relative);
+                monikers.Add(relative.Replace('^', '.'));
+            }
+            return monikers;
         }
 
         private string ObserveDocumentText(object entry)

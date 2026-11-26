@@ -10,16 +10,29 @@ present; the fifteen-tool development catalog requires trusted in-code
 `enableDevelopmentSourceTools:true` in those published artifacts. Native
 development factories remain opt-in host APIs.
 
-The unpublished Assistant integration can launch an owned child with the single
+The Assistant Editor profile can launch an owned child with the single
 argument `--host-editor-bootstrap-stdin`. It authenticates the same stdin
-bootstrap and pipe as `--host-bootstrap-stdin`, then exposes the six existing
-source definitions in addition to the nine build/session/diagnostic tools.
-Neither host mode connects to ADS. Catalog selection is not native authorization.
-Source mutations still require an applicable XML-buffer preview, exact document
-and baseline checks, and the host's separate approval. The attached normal
-TwinCAT ST editor still supports read-only preview.
+bootstrap and pipe as `--host-bootstrap-stdin`, then adds seven source tools
+to the nine build, session and diagnostic tools.
 
-The unpublished Debug child mode `--host-debug-bootstrap-stdin` exposes the
+- `plc_source_targets`
+- `plc_source_read`
+- `plc_source_preview`
+- `plc_source_apply`
+- `plc_source_rollback`
+- `plc_source_journal`
+- `plc_source_create`
+
+Build and Editor modes operate without ADS. The Editor profile supports
+Automation Interface ST editing and creation when the native host supplies the
+required callbacks and interop types. An eligible open XML buffer supports
+preview, apply and rollback. The attached TwinCAT ST editor view provides
+read-only previews. Apply and rollback require verified source images and a
+separate native approval. For `source.create`, the approval binds the exact
+request, target path and kind, expiry, and canonical creation JSON with
+normalized initial text and effective defaults.
+
+The Debug child mode `--host-debug-bootstrap-stdin` exposes the
 nine build/session/diagnostic tools plus `plc_debug_state` and
 `plc_debug_read`. It omits all source mutation tools. A Debug tool makes the
 internal `debug.context` request on the authenticated host channel with empty
@@ -407,18 +420,26 @@ and matching DTE documents, including member monikers. Unexplained dirty state
 returns `conflict / unsaved_editor_changes`. An existing dirty flag is accepted
 only while the session's verified post-image and document evidence still match.
 A matching unsaved DTE document must expose a stable text observation for a
-second write, including rollback. The provider refuses a dirty open document
-whose independent text cannot be verified. A refusal for dirty state before
-the setter leaves the preview or rollback journal available for a new operation
-ID after saving. Rollback checks the exact journaled post-image before restoring
-the pre-image.
+second write, including rollback. A semicolon suffix can identify a known member
+only when the full moniker identifies no separate file on disk. Unrecognized
+suffixes mark the owner dirty without contributing text evidence.
+A verified pre-setter conflict leaves the preview or rollback journal available
+for a new operation ID once the exact baseline or post-image is restored.
+The original operation ID replays its conflict. An unknown outcome after
+submission keeps the claim. Rollback checks the exact journaled post-image
+before restoring the pre-image.
 Results and provenance report `source: "automationInterface"` and
 `persistence: "mayPersistToDisk"`.
 
-The provider budgets 16,777,216 UTF-16 units per session for retained XML and
-Automation Interface preview and journal text. When a preview would exceed that budget, it returns
-`refused / source_session_memory_limit`. An attached-editor read-only preview that
-exceeds the response limit returns `refused / source_preview_too_large`.
+The provider shares a session budget of 16,777,216 UTF-16 units across XML and
+Automation Interface preview and journal images and serialized source replay
+responses, including attached read-only previews. If storing either a preview's
+images or its replay response would exceed the budget, the provider returns
+`refused / source_session_memory_limit` and retains no preview ID or images for
+that request. The 128 replay slots bound the small receipts, which can still
+record apply, rollback and create outcomes at the preview limit. Existing
+journals remain readable and usable for rollback. A preview exceeding the
+1 MiB transport response limit returns `refused / source_preview_too_large`.
 
 `source.create` accepts these fields.
 
@@ -448,8 +469,16 @@ are null for creation.
 
 The provider checks the parent and duplicate name before approval and again
 before `CreateChild`. Member owners and standalone destinations must be inside
-the PLC project directory. An existing file or directory at a standalone
-destination returns `conflict / target_file_already_exists`. The provider creates
+the PLC project directory. Windows final directory paths establish project
+membership and reparse points at or below the project root are rejected. For
+standalone objects, the provider uses a single canonical folder `FullPath` from
+Automation Interface XML. Otherwise, it requires an unlinked, project-relative
+`Folder` item or `Compile` path from the bound `.plcproj`, plus agreement from
+every readable standalone sibling path. The project XML is limited to 1 MiB
+and cannot use DTDs. Insufficient directory evidence returns
+`refused / creation_parent_path_unverified`. An existing file or directory at a
+standalone destination, including a case-insensitive name collision, returns
+`conflict / target_file_already_exists` for ordinary entries. The provider creates
 the selected accessors and verifies the initial sections.
 TwinCAT writes the object file or modifies the owning POU file and leaves project
 changes pending save. Success reports `persistence: "fileWrittenProjectPendingSave"`

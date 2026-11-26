@@ -34,6 +34,28 @@ class Program {
       Check((string)oversized["status"] == "refused" && (string)oversized["error"] == "source_preview_too_large" &&
           doc.Value.Length == 65536 && approvals == 0, "65536-unit attached preview exceeds the UTF-8 response limit");
   }
+  doc.Value = new string('\u0001', 33000);
+  var largeArgs = new { objectId, section = "declaration", proposedText = new string('\u0002', 33000) };
+  int largePreviews = 0;
+  Dictionary<string, object> rejected = null;
+  for (int i = 0; i < 20 && rejected == null; i++)
+  {
+      var large = call("source.preview", largeArgs);
+      if ((string)large["status"] != "succeeded") rejected = large;
+      else
+      {
+          Check(json.Serialize(large).Length > 980000, "attached preview replay approaches the 1 MiB response limit");
+          largePreviews++;
+      }
+  }
+  Check(rejected != null && (string)rejected["status"] == "refused" &&
+      (string)rejected["error"] == "source_session_memory_limit" && largePreviews > 0 && largePreviews <= 17,
+      "attached preview replays hit the shared budget within 17 near-limit responses");
+  var rejectedApply = call("source.apply", new { previewId = (string)rejected["operationId"],
+      approvalExpiresUtc = DateTime.UtcNow.AddMinutes(1).ToString("o"), baselineDigest = (string)result["documentDigest"],
+      proposedDigest = (string)result["proposedDocumentDigest"], projectRevision = (string)result["projectRevision"] });
+  Check((string)rejectedApply["status"] == "refused" && (string)rejectedApply["error"] == "preview_not_found" && approvals == 0,
+      "over-budget attached preview leaves no apply route");
   doc.Value = "dirty live text";
  }
  bool projectDirty=false;var membershipChanging=new CustomStReader(project,(o,s)=>{if(o==objectId && s=="implementation")projectDirty=true;return view;},p=>p==project?projectDirty:state,()=>ctx,"session");Check(membershipChanging.Targets(source)==null,"target aggregate rejects project dirtied after a supported section");

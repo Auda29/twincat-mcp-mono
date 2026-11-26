@@ -6,7 +6,12 @@ The Editor catalog gains `plc_source_create` for 16 tools. The Build and Debug
 catalogs match the published 0.5.8 assets byte for byte. The Editor catalog
 SHA-256 is `bd5d205ceec3f465d732fa921687e5e13b6a9e7f4c17a079bf1915f42704e954`.
 The Editor provider adds project-wide Automation Interface ST discovery and
-approved source editing and creation.
+approved source editing and creation. Standalone creation requires a verified
+physical parent before approval and again before submission. Missing evidence
+returns `refused / creation_parent_path_unverified`. One session budget covers
+stored XML and Automation Interface source images and serialized source replay
+responses, including attached read-only previews. Existing journals and small
+mutation receipts remain usable when the preview budget fills.
 The nine-parameter host factory takes three additional authoritative type
 names through its existing callback. See the
 [provider contract](native-engineering-provider-v1.md#editor-profile-source-operations)

@@ -126,6 +126,7 @@ namespace TwinCatMcp.Engineering.Host
         private readonly Func<string, string, object> getSectionEditor;
         private readonly EngineeringInteropTypes interopTypes;
         private const int MaxRequestBytes = 1024 * 1024, MaxResponseBytes = 1024 * 1024;
+        private readonly SourcePolicy.RetentionBudget retention = new SourcePolicy.RetentionBudget();
         private SourcePolicy sources, automationSources;
         private AutomationStSourceEditor automationEditor;
         private readonly HashSet<Guid> automationPreviews = new HashSet<Guid>();
@@ -187,7 +188,7 @@ namespace TwinCatMcp.Engineering.Host
             if (requestedName == "session.ping" || requestedName == "session.describe" ||
                 requestedName == "project.association" || requestedName == "project.online" || requestedName == "operation.get" || requestedName == "diagnostics.read" || requestedName == "output.read" || requestedName == "source.read" || requestedName == "source.journal" || requestedName == "source.targets")
             {
-                try { return DispatchValidated(requestJson, request, json, session, operation); }
+                try { return DispatchValidated(requestJson, request, json, session, operation, out _); }
                 catch { return Failure(json, session, operation, "unknown", "dispatch_failed"); }
             }
             string fingerprint = Hash(requestJson);
@@ -202,8 +203,19 @@ namespace TwinCatMcp.Engineering.Host
             // interrupted result is unknown and must never repeat submission.
             requests.Add(operation, Tuple.Create(fingerprint, Failure(json, session, operation, "unknown", "operation_in_progress")));
             string result;
-            try { result = DispatchValidated(requestJson, request, json, session, operation); }
+            bool previewRetained = false;
+            try { result = DispatchValidated(requestJson, request, json, session, operation, out previewRetained); }
             catch { result = Failure(json, session, operation, "unknown", "dispatch_failed"); }
+            finally
+            {
+                if (requestedName == "source.preview" && !previewRetained)
+                {
+                    sources?.DiscardPreview(operation.ToString("D"));
+                    automationSources?.DiscardPreview(operation.ToString("D"));
+                }
+            }
+            if (!previewRetained && requestedName != null && requestedName.StartsWith("source.", StringComparison.Ordinal))
+                retention.RetainReceipt(result.Length + fingerprint.Length);
             requests[operation] = Tuple.Create(fingerprint, result);
             return result;
         }
@@ -229,8 +241,10 @@ namespace TwinCatMcp.Engineering.Host
             return result;
         }
 
-        private string DispatchValidated(string requestJson, Dictionary<string, object> request, JavaScriptSerializer json, Guid session, Guid operation)
+        private string DispatchValidated(string requestJson, Dictionary<string, object> request, JavaScriptSerializer json,
+            Guid session, Guid operation, out bool previewRetained)
         {
+            previewRetained = false;
             var expected = request["expected"] as Dictionary<string, object>;
             var current = currentContext();
             ValidateContext(expected, current, session);
@@ -295,7 +309,8 @@ namespace TwinCatMcp.Engineering.Host
                     if (args == null) return Failure(json, session, operation, "refused", "invalid_source_arguments");
                     InitializeSources(current);
                     SourceResult result;
-                    bool attachedPreview = false;
+                    bool attachedPreview = false, isPreview = name == "source.preview";
+                    SourcePolicy previewPolicy = null;
                     if (name == "source.create")
                     {
                         if (automationEditor == null) return Failure(json, session, operation, "unsupported", "automation_source_unavailable");
@@ -331,8 +346,9 @@ namespace TwinCatMcp.Engineering.Host
                         var source = isAutomation ? automationSources : sources;
                         result = source == null ? new SourceResult("unsupported", "automation_source_unavailable") :
                             name == "source.read" ? source.Read(objectId, args["section"] as string)
-                            : source.Preview(operation.ToString("D"), objectId, args["section"] as string, args.ContainsKey("proposedText") ? args["proposedText"] as string : null);
-                        if (isAutomation && name == "source.preview" && result.Status == "succeeded") automationPreviews.Add(operation);
+                            : source.Preview(operation.ToString("D"), objectId, args["section"] as string,
+                                args.ContainsKey("proposedText") ? args["proposedText"] as string : null, deferPublication: true);
+                        if (isPreview && result.Status == "succeeded") previewPolicy = source;
                         if (!isAutomation && result.Status != "succeeded" && result.ErrorCode != "source_session_memory_limit" && getSectionEditor != null)
                         {
                             var attached = name == "source.read" ? CustomReader(current).Read(args["objectId"] as string, args["section"] as string)
@@ -375,7 +391,12 @@ namespace TwinCatMcp.Engineering.Host
                         var source = isAutomation ? automationSources : sources;
                         // Reserve the route so a reentrant journal read during submission reaches the same policy.
                         if (isAutomation && isApply) automationJournals.Add(operation);
-                        result = isApply ? source.Apply(operation.ToString("D"), referenced.ToString("D")) : source.Rollback(operation.ToString("D"), referenced.ToString("D"));
+                        try
+                        {
+                            result = isApply ? source.Apply(operation.ToString("D"), referenced.ToString("D")) :
+                                source.Rollback(operation.ToString("D"), referenced.ToString("D"));
+                        }
+                        finally { sourceCalls.Remove(operation); }
                     }
                     var sourceName = SourceResultField(result, "source") ?? "unknown";
                     var sourceDirty = SourceResultField(result, "dirtyState") ?? "unknown";
@@ -386,15 +407,27 @@ namespace TwinCatMcp.Engineering.Host
                             provenance = Provenance(null, sourceName, sourceDirty, SourceResultField(result, "persistence")),
                             error = result.ErrorCode, result = result.Result });
                     }
-                    catch (InvalidOperationException) when (attachedPreview)
+                    catch (InvalidOperationException) when (isPreview)
                     {
                         // The serializer enforces a character limit before the UTF-8 byte check.
                         return Failure(json, session, operation, "refused", "source_preview_too_large");
                     }
                     if (Encoding.UTF8.GetByteCount(response) > MaxResponseBytes)
-                        return attachedPreview ? Failure(json, session, operation, "refused", "source_preview_too_large") :
+                        return isPreview ? Failure(json, session, operation, "refused", "source_preview_too_large") :
                             Failure(json, session, operation, "unknown", "source_response_too_large");
-                    if (attachedPreview) customReadPreviews.Add(operation);
+                    if (isPreview && result.Status == "succeeded")
+                    {
+                        const int fingerprintChars = 64; // SHA-256 hex in requests.
+                        if (!retention.TryReserve(response.Length + fingerprintChars))
+                            return Failure(json, session, operation, "refused", "source_session_memory_limit");
+                        if (attachedPreview) customReadPreviews.Add(operation);
+                        else
+                        {
+                            previewPolicy.PublishPreview(operation.ToString("D"));
+                            if (previewPolicy == automationSources) automationPreviews.Add(operation);
+                        }
+                        previewRetained = true;
+                    }
                     return response;
                 }
                 if (name == "project.online")
@@ -520,7 +553,6 @@ namespace TwinCatMcp.Engineering.Host
             if (getTextBuffer != null)
                 sourceEditor = new XmlStSourceEditor(bound.ProjectFile, getTextBuffer, dirty, ContextKey, key);
             automationEditor = AutomationStSourceEditor.TryCreate(dte, interopTypes, bound, dirty, getTextBuffer, ContextKey, key);
-            var retention = new SourcePolicy.RetentionBudget();
             sources = new SourcePolicy((ISourceEditor)sourceEditor ?? new SourceUnsupportedEditor(), ContextKey, ConsumeSourceApproval,
                 SourceAuthorizationCurrent, retention: retention);
             if (automationEditor != null)

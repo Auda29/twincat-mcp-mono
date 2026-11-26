@@ -110,7 +110,7 @@ describe("explicit live engineering tools", () => {
       if (returnType === undefined) expect(methodArgs).not.toHaveProperty("returnType");
       else expect(methodArgs.returnType).toBe(returnType);
     }
-    for (const reserved of ["END_IF", "whILe", "VAR", "TRUE", "FALSE", "PUBLIC", "VAR_INST", "READ_ONLY"]) {
+    for (const reserved of ["END_IF", "whILe", "VAR", "TRUE", "FALSE", "PUBLIC", "VAR_INST", "READ_ONLY", "AND_THEN", "OR_ELSE"]) {
       await expect(create.execute({ ...method, returnType: reserved })).rejects.toThrow();
       await expect(create.execute({ ...method, name: reserved })).rejects.toThrow();
     }

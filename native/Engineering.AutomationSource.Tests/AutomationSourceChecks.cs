@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -28,9 +29,10 @@ internal sealed class AutomationSourceChecks : IDisposable
     private readonly List<ApprovalRequest> approvals = new List<ApprovalRequest>();
     private static int assertions;
 
-    private AutomationSourceChecks(bool enable = true)
+    private AutomationSourceChecks(bool enable = true, bool nestedProjectDirectory = false)
     {
         var directory = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "automation-source-fixture-" + Guid.NewGuid().ToString("N")));
+        if (nestedProjectDirectory) directory = Path.Combine(directory, "PLC");
         context = new HostContext(Guid.NewGuid(), 1234, DateTime.UtcNow, Path.Combine(directory, "Fixture.sln"),
             Path.Combine(directory, "Fixture.plcproj"), "epoch");
         expected = new { idePid = context.IdePid, ideStartedUtc = context.IdeStartedUtc.ToString("o"),
@@ -125,7 +127,8 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(response, "succeeded");
         return Result(response);
     }
-    private static object ApplyArgs(Dictionary<string, object> p, string expiry = null) => new { previewId = p["previewOperationId"],
+    private static object ApplyArgs(Dictionary<string, object> p, string expiry = null, Guid? previewId = null) => new {
+        previewId = previewId?.ToString("D") ?? p["previewOperationId"],
         approvalExpiresUtc = expiry ?? Expiry(), baselineDigest = p["baselineDigest"], proposedDigest = p["proposedDigest"], projectRevision = p["projectRevision"] };
     private static object RollbackArgs(Dictionary<string, object> p, Guid applyId) => new { journalId = applyId.ToString("D"),
         approvalExpiresUtc = Expiry(), baselineDigest = p["proposedDigest"], proposedDigest = p["baselineDigest"], projectRevision = p["projectRevision"] };
@@ -228,8 +231,26 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(Call("source.apply", ApplyArgs(p)), "conflict", "baseline_changed");
         Expect(approvals.Count == approvalCount, "Changed owning object is detected before approval");
         p = Preview(mainId, "new mapping", "declaration");
+        var baselineMapping = plc.MappingMarker;
+        var conflictedApply = Guid.NewGuid();
+        var conflictArgs = ApplyArgs(p);
         onApproval = () => plc.MappingMarker = "changed";
-        Status(Call("source.apply", ApplyArgs(p)), "conflict", "source_exchange_conflict");
+        Status(Call("source.apply", conflictArgs, conflictedApply), "conflict", "source_exchange_conflict");
+        Status(Call("source.journal", new { journalId = conflictedApply.ToString("D") }), "refused", "journal_not_found");
+        plc.MappingMarker = baselineMapping;
+        Status(Call("source.apply", conflictArgs, conflictedApply), "conflict", "source_exchange_conflict");
+        var freshApply = Guid.NewGuid();
+        Status(Call("source.apply", conflictArgs, freshApply), "succeeded");
+        var conflictedRollback = Guid.NewGuid();
+        var rollback = RollbackArgs(p, freshApply);
+        onApproval = () => plc.MappingMarker = "changed";
+        Status(Call("source.rollback", rollback, conflictedRollback), "conflict", "source_exchange_conflict");
+        Expect(!(bool)Result(Call("source.journal", new { journalId = freshApply.ToString("D") }))["rollbackSubmitted"],
+            "Final Automation Interface comparison releases the rollback claim");
+        plc.MappingMarker = baselineMapping;
+        Status(Call("source.rollback", rollback, conflictedRollback), "conflict", "source_exchange_conflict");
+        Status(Call("source.rollback", rollback), "succeeded");
+        Clean();
 
         p = Preview(mainId, "unverified", "declaration");
         main.FailReadback = true;
@@ -241,6 +262,7 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(Call("source.rollback", RollbackArgs(p, unknownId)), "refused", "apply_outcome_unresolved");
         main.FailReadback = false;
         Clean();
+        Status(Call("source.apply", request), "refused", "preview_already_submitted");
 
         method.Impl = new string('\x0001', 65536);
         p = Preview(methodId, new string('\x0002', 65536));
@@ -306,6 +328,72 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(Call("source.read", new { objectId = mainId, section = "implementation" }), "unsupported", error);
     }
 
+    private void UnrelatedDocument()
+    {
+        var directory = Path.GetDirectoryName(main.PhysicalFile);
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var backup = main.PhysicalFile + ";backup.TcPOU";
+            File.WriteAllText(backup, "separate file");
+            document.FullName = backup;
+            document.Saved = false;
+            var p = Preview(methodId, "different implementation");
+            var apply = Guid.NewGuid();
+            Status(Call("source.apply", ApplyArgs(p), apply), "succeeded");
+            Expect(dirtyPaths.Contains(main.PhysicalFile) && !document.Saved, "Only the host marks the owner dirty");
+            Status(Call("source.rollback", RollbackArgs(p, apply)), "conflict", "unsaved_editor_changes");
+
+            Clean();
+            File.Delete(backup);
+            document.Saved = false;
+            var next = Preview(methodId, "next implementation");
+            Status(Call("source.apply", ApplyArgs(next)), "conflict", "unsaved_editor_changes");
+            Clean();
+            var unresolved = Guid.NewGuid();
+            Status(Call("source.apply", ApplyArgs(next), unresolved), "succeeded");
+            Status(Call("source.rollback", RollbackArgs(next, unresolved)), "conflict", "unsaved_editor_changes");
+
+            Clean();
+            document.FullName = main.PhysicalFile + ";POUs^Main^Run";
+            var known = Preview(methodId, "known member implementation");
+            var knownApply = Guid.NewGuid();
+            Status(Call("source.apply", ApplyArgs(known), knownApply), "succeeded");
+            Status(Call("source.rollback", RollbackArgs(known, knownApply)), "succeeded");
+        }
+        finally { Directory.Delete(Path.GetDirectoryName(context.ProjectFile), true); }
+    }
+
+    private void PreviewReplayBudget()
+    {
+        var first = Preview(methodId, "a := 1;");
+        var apply = Guid.NewGuid();
+        Status(Call("source.apply", ApplyArgs(first), apply), "succeeded");
+        method.Impl = new string('\x0001', 65536);
+        var args = new { objectId = methodId, section = "implementation", proposedText = new string('\x0002', 65536) };
+        var refusals = 0;
+        for (int i = 0; i < 23; i++)
+        {
+            var id = Guid.NewGuid();
+            var response = Call("source.preview", args, id);
+            if ((string)response["status"] == "succeeded")
+            {
+                Expect(refusals == 0 && serializer.Serialize(response).Length > 780000, "Large replay must count against the shared budget");
+                continue;
+            }
+            Status(response, "refused", "source_session_memory_limit");
+            Status(Call("source.preview", args, id), "refused", "source_session_memory_limit");
+            Status(Call("source.apply", ApplyArgs(first, previewId: id)), "refused", "preview_not_found");
+            refusals++;
+        }
+        Expect(refusals >= 7, "Automation preview replay and source images hit the limit within 16 large responses");
+        method.Impl = "a := 1;";
+        Preview(methodId, "small preview still fits after discarding the refused images");
+        Status(Call("source.journal", new { journalId = apply.ToString("D") }), "succeeded");
+        Status(Call("source.rollback", RollbackArgs(first, apply)), "succeeded");
+        Status(Call("source.create", CreateArgs("POUs", "SmallReceipt", "fb")), "succeeded");
+    }
+
     private void CreationDiskBoundary()
     {
         var projectDirectory = Path.GetDirectoryName(context.ProjectFile);
@@ -328,24 +416,100 @@ internal sealed class AutomationSourceChecks : IDisposable
             Directory.CreateDirectory(gvls.PhysicalFile);
             gvls.OmitPhysicalPath = true;
             File.WriteAllText(Path.Combine(gvls.PhysicalFile, "Existing.TcGVL"), "unreferenced GVL");
-            Status(Call("source.create", CreateArgs("GVLs", "Existing", "gvl")), "conflict", "target_file_already_exists");
-            Expect(approvals.Count == 0 && gvls.CreateCount == 0, "Missing folder FullPath falls back to the PLC-relative directory");
+            var unverified = CreateArgs("GVLs", "Existing", "gvl");
+            Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
+            foreach (var invalid in new[] {
+                "<Compile Include='GVLs\\Globals.TcGVL'><Link>Globals.TcGVL</Link></Compile>",
+                "<Compile Include='GVLs\\..\\Globals.TcGVL'/>",
+                "<Folder Include='" + gvls.PhysicalFile + "'/>"
+            })
+            {
+                File.WriteAllText(context.ProjectFile, "<Project><ItemGroup>" + invalid + "</ItemGroup></Project>");
+                Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
+            }
+            File.WriteAllText(context.ProjectFile, "<!DOCTYPE Project [<!ENTITY folder 'GVLs'>]><Project><ItemGroup><Folder Include='&folder;'/></ItemGroup></Project>");
+            Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
+            File.WriteAllText(context.ProjectFile, "<Project><ItemGroup><Folder Include='GVLs'/></ItemGroup></Project>" + new string(' ', 1024 * 1024));
+            Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
+
+            const string folderProject = "<Project xmlns='http://schemas.microsoft.com/developer/msbuild/2003'><ItemGroup><Folder Include='gvls\\'/></ItemGroup></Project>";
+            File.WriteAllText(context.ProjectFile, folderProject);
+            var sibling = gvls.Children.Single();
+            var siblingPath = sibling.PhysicalFile;
+            sibling.PhysicalFile = Path.Combine(mappedDirectory, "Globals.TcGVL");
+            Status(Call("source.create", unverified), "refused", "creation_parent_path_unverified");
+            sibling.PhysicalFile = siblingPath;
+            Status(Call("source.create", unverified), "conflict", "target_file_already_exists");
+            File.WriteAllText(context.ProjectFile, "<Project><ItemGroup><Compile Include='GVLs/Globals.TcGVL'/></ItemGroup></Project>");
+            Status(Call("source.create", unverified), "conflict", "target_file_already_exists");
+            Expect(approvals.Count == 0 && gvls.CreateCount == 0, "Project evidence and sibling corroboration precede approval");
+
+            onApproval = () => File.WriteAllText(context.ProjectFile, "<Project />");
+            Status(Call("source.create", CreateArgs("GVLs", "Late", "gvl")), "refused", "creation_parent_path_unverified");
+            Expect(approvals.Count == 1 && gvls.CreateCount == 0, "Project evidence is rechecked after approval");
 
             onApproval = () => File.WriteAllText(Path.Combine(folder.PhysicalFile, "Late.TcPOU"), "appeared during approval");
             Status(Call("source.create", CreateArgs("POUs^SubFolder", "Late", "fb")), "conflict", "target_file_already_exists");
-            Expect(approvals.Count == 1 && folder.CreateCount == 0, "Recheck disk right before CreateChild");
+            Expect(approvals.Count == 2 && folder.CreateCount == 0, "Recheck disk right before CreateChild");
 
             main.PhysicalFile = Path.Combine(projectDirectory + "-linked", "Main.TcPOU");
             Status(Call("source.create", CreateArgs("POUs^Main", "A_Linked", "action")), "refused", "creation_path_outside_project");
             folder.PhysicalFile = projectDirectory + "-linked";
             Status(Call("source.create", CreateArgs("POUs^SubFolder", "Outside", "fb")), "refused", "creation_path_outside_project");
-            Expect(approvals.Count == 1 && main.CreateCount == 0 && folder.CreateCount == 0, "Linked owner and mapped folder outside the PLC project refuse before approval");
+            Expect(approvals.Count == 2 && main.CreateCount == 0 && folder.CreateCount == 0, "Linked owner and mapped folder outside the PLC project refuse before approval");
         }
         finally
         {
             if (!Path.GetFullPath(projectDirectory).StartsWith(Path.Combine(Path.GetTempPath(), "automation-source-fixture-"), StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException();
             Directory.Delete(projectDirectory, true);
+        }
+    }
+
+    private void CaseSensitiveCreationBoundary()
+    {
+        var projectDirectory = Path.GetDirectoryName(context.ProjectFile);
+        var container = Path.GetDirectoryName(projectDirectory);
+        Directory.CreateDirectory(container);
+        try
+        {
+            var alternateRoot = Path.Combine(container, "plc");
+            var actualFolder = pous.PhysicalFile;
+            pous.PhysicalFile = Path.Combine(alternateRoot, Path.GetFileName(actualFolder));
+            Status(Call("source.create", CreateArgs("POUs", "WrongRoot", "fb")), "refused", "creation_path_outside_project");
+
+            if (!EnableCaseSensitivity(container))
+            {
+                Console.WriteLine("Case-distinct Windows directory fixture requires an NTFS directory with case sensitivity support.");
+                return;
+            }
+            Directory.CreateDirectory(actualFolder);
+            Directory.CreateDirectory(pous.PhysicalFile);
+            Expect(Directory.GetDirectories(container).Length == 2, "PLC and plc are separate physical directories");
+            Status(Call("source.create", CreateArgs("POUs", "WrongRoot", "fb")), "refused", "creation_path_outside_project");
+            pous.PhysicalFile = actualFolder;
+
+            if (!EnableCaseSensitivity(actualFolder))
+                throw new InvalidOperationException("The nested NTFS directory must support case-sensitive names.");
+            File.WriteAllText(Path.Combine(actualFolder, "Collision.TcPOU"), "existing physical entry");
+            Expect(!File.Exists(Path.Combine(actualFolder, "COLLISION.TcPOU")), "Windows lookup distinguishes case in the destination");
+            Status(Call("source.create", CreateArgs("POUs", "COLLISION", "fb")), "conflict", "target_file_already_exists");
+            Expect(approvals.Count == 0 && pous.CreateCount == 0, "Neither case-distinct location reaches approval");
+        }
+        finally { Directory.Delete(container, true); }
+    }
+
+    private static bool EnableCaseSensitivity(string directory)
+    {
+        var start = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "fsutil.exe"),
+            "file setCaseSensitiveInfo \"" + directory + "\" enable") { UseShellExecute = false, RedirectStandardOutput = true };
+        using (var process = Process.Start(start))
+        {
+            var output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit();
+            if (process.ExitCode == 0) return true;
+            Console.WriteLine(output);
+            return false;
         }
     }
 
@@ -412,11 +576,11 @@ internal sealed class AutomationSourceChecks : IDisposable
         Status(Call("source.create", CreateArgs("POUs^Graphical", "A_No", "action")), "refused", "invalid_creation_parent_kind");
         foreach (var parent in new[] { "POUs^^Test", "POUs^..", "POUs^x/y", "POUs^ x", "POUs^x\n" })
             Status(Call("source.create", CreateArgs(parent, "BadParent", "fb")), "refused", "invalid_source_create_arguments");
-        foreach (var name in new[] { "1motor", "invalid.name", "name\n", new string('x', 65), "WHILE", "vAr_InPuT", "public", "True", "dInT", "aCtIoN", "sizeof" })
+        foreach (var name in new[] { "1motor", "invalid.name", "name\n", new string('x', 65), "WHILE", "vAr_InPuT", "public", "True", "dInT", "aCtIoN", "sizeof", "AND_THEN", "OR_ELSE" })
             Status(Call("source.create", CreateArgs("POUs", name, "fb")), "refused", "invalid_source_create_arguments");
         Status(Call("source.create", CreateArgs("POUs", "NoReturnType", "fun")), "refused", "invalid_source_create_arguments");
         Status(Call("source.create", CreateArgs("POUs^Main", "P_NoType", "property")), "refused", "invalid_source_create_arguments");
-        foreach (var returnType in new[] { "END_IF", "while", "VAR", "TRUE", "false", "PUBLIC", null, "" })
+        foreach (var returnType in new[] { "END_IF", "while", "VAR", "TRUE", "false", "PUBLIC", "AND_THEN", "OR_ELSE", null, "" })
         {
             var args = CreateArgs("POUs^Main", "M_Invalid", "method");
             args["returnType"] = returnType;
@@ -462,9 +626,12 @@ internal sealed class AutomationSourceChecks : IDisposable
             fixture.Edit();
         }
         using (var fixture = new AutomationSourceChecks()) fixture.DirtyRollback();
+        using (var fixture = new AutomationSourceChecks()) fixture.UnrelatedDocument();
+        using (var fixture = new AutomationSourceChecks()) fixture.PreviewReplayBudget();
         using (var fixture = new AutomationSourceChecks()) fixture.MixedOwner();
         using (var fixture = new AutomationSourceChecks()) fixture.Create();
         using (var fixture = new AutomationSourceChecks()) fixture.CreationDiskBoundary();
+        using (var fixture = new AutomationSourceChecks(nestedProjectDirectory: true)) fixture.CaseSensitiveCreationBoundary();
         using (var disabled = new AutomationSourceChecks(enable: false))
         {
             Status(disabled.Call("source.targets", new { }), "unsupported", "source_features_disabled");

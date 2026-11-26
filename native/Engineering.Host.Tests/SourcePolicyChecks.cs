@@ -46,9 +46,33 @@ internal static class SourcePolicyChecks
         var raced = Id();
         Status(policy.Preview(raced, "POU:Main", "implementation", "raced"), "succeeded", "race preview");
         editor.BeforeExchange = () => editor.Text = "concurrent edit";
-        Status(policy.Apply(Id(), raced), "conflict", "atomic final compare rejects race");
-        Expect(editor.Text == "concurrent edit" && editor.Writes == 2, "concurrent edit retained");
+        var racedApply = Id();
+        var conflict = policy.Apply(racedApply, raced);
+        Status(conflict, "conflict", "atomic final compare rejects race");
+        Expect(conflict.ErrorCode == "source_exchange_conflict" && editor.Text == "concurrent edit" && editor.Writes == 2,
+            "pre-setter conflict retains concurrent edit");
+        Status(policy.GetJournal(racedApply), "refused", "pre-setter conflict leaves no journal");
         editor.BeforeExchange = null;
+        editor.Text = "original";
+        Status(policy.Apply(racedApply, raced), "conflict", "pre-setter apply conflict is replayed");
+        var retryApply = Id();
+        Status(policy.Apply(retryApply, raced), "succeeded", "fresh apply may claim the same preview");
+
+        var racedRollback = Id();
+        editor.BeforeExchange = () => editor.Text = "concurrent edit";
+        Expect(policy.Rollback(racedRollback, retryApply).ErrorCode == "source_exchange_conflict", "final rollback comparison conflicts");
+        Expect(!(bool)policy.GetJournal(retryApply).Result["rollbackSubmitted"], "pre-setter conflict releases rollback claim");
+        editor.BeforeExchange = null;
+        editor.Text = "raced";
+        Status(policy.Rollback(racedRollback, retryApply), "conflict", "pre-setter rollback conflict is replayed");
+        editor.ThrowAfterWrite = true;
+        var unknownRollback = Id();
+        Status(policy.Rollback(unknownRollback, retryApply), "unknown", "fresh rollback submits and fails after write");
+        editor.ThrowAfterWrite = false;
+        editor.Text = "raced";
+        Status(policy.Rollback(unknownRollback, retryApply), "unknown", "unknown rollback outcome is replayed");
+        Expect(policy.Rollback(Id(), retryApply).ErrorCode == "rollback_already_submitted", "unknown rollback cannot retry");
+        Expect(editor.Writes == 4, "only the fresh apply and rollback reached setters");
 
         var uncertain = Id();
         Status(policy.Preview(uncertain, "POU:Main", "implementation", "uncertain"), "succeeded", "unknown preview");

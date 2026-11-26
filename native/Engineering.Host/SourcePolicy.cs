@@ -150,7 +150,7 @@ namespace TwinCatMcp.Engineering.Host
             }
         }
 
-        internal SourceResult Preview(string previewOperationId, string objectId, string section, string proposedText)
+        internal SourceResult Preview(string previewOperationId, string objectId, string section, string proposedText, bool deferPublication = false)
         {
             lock (gate)
             {
@@ -167,14 +167,13 @@ namespace TwinCatMcp.Engineering.Host
                     try { proposedBuffer = snapshot.BuildReplacement(proposedText); }
                     catch { return Refused("source_replacement_unmappable"); }
                     if (!ValidBuffer(proposedBuffer)) return Refused("source_replacement_unmappable");
-                    // Journals and replay results share these strings with the preview.
+                    // Journals and policy replay results share these strings with the preview.
                     int imageChars = snapshot.Text.Length + proposedText.Length + snapshot.BufferText.Length + proposedBuffer.Length;
-                    if (!retention.TryReserve(imageChars)) return Refused("source_session_memory_limit");
                     var preview = new SourcePreview { ObjectId = objectId, Section = section, PreviewId = previewOperationId,
                         Before = snapshot.Text, After = proposedText, BeforeBuffer = snapshot.BufferText, AfterBuffer = proposedBuffer,
-                        ProjectRevision = snapshot.ProjectRevision, BufferIdentity = snapshot.BufferIdentity, StateDigest = snapshot.StateDigest };
-                    previews.Add(previewOperationId, preview);
-                    return new SourceResult("succeeded", result: WithSource(new Dictionary<string, object> {
+                        ProjectRevision = snapshot.ProjectRevision, BufferIdentity = snapshot.BufferIdentity, StateDigest = snapshot.StateDigest,
+                        ImageChars = imageChars, Published = !deferPublication };
+                    var result = new SourceResult("succeeded", result: WithSource(new Dictionary<string, object> {
                         { "previewOperationId", previewOperationId }, { "objectId", objectId }, { "section", section },
                         { "baselineDigest", Digest(preview.BeforeBuffer) }, { "proposedDigest", Digest(preview.AfterBuffer) },
                         { "sectionBaselineDigest", Digest(preview.Before) }, { "sectionProposedDigest", Digest(preview.After) },
@@ -182,7 +181,26 @@ namespace TwinCatMcp.Engineering.Host
                         { "dirtyState", snapshot.DirtyState ?? "unknown" },
                         { "truncated", false }
                     }));
+                    if (!retention.TryReserve(imageChars)) return Refused("source_session_memory_limit");
+                    previews.Add(previewOperationId, preview);
+                    return result;
                 });
+            }
+        }
+
+        internal void PublishPreview(string operationId)
+        {
+            lock (gate) previews[operationId].Published = true;
+        }
+
+        internal void DiscardPreview(string operationId)
+        {
+            lock (gate)
+            {
+                if (!previews.TryGetValue(operationId, out var preview) || preview.Published) return;
+                previews.Remove(operationId);
+                operations.Remove(operationId);
+                retention.Release(preview.ImageChars);
             }
         }
 
@@ -212,7 +230,7 @@ namespace TwinCatMcp.Engineering.Host
                 previewOperationId = CanonicalId(previewOperationId);
                 return Once(operationId, Fingerprint("source.apply", previewOperationId), () => {
                     SourcePreview preview;
-                    if (previewOperationId == null || !previews.TryGetValue(previewOperationId, out preview)) return Refused("preview_not_found");
+                    if (previewOperationId == null || !previews.TryGetValue(previewOperationId, out preview) || !preview.Published) return Refused("preview_not_found");
                     if (preview.Consumed) return Refused("preview_already_submitted");
                     var check = CheckTarget(preview.ObjectId, preview.Section);
                     if (check != null) return check;
@@ -305,17 +323,17 @@ namespace TwinCatMcp.Engineering.Host
             try { outcome = editor.CompareExchange(request); }
             catch { outcome = SourceExchangeOutcome.Unknown; }
             // These outcomes attest that the editor refused before any setter ran.
-            if (outcome == SourceExchangeOutcome.UnsavedEditorChanges || outcome == SourceExchangeOutcome.MixedLanguageOwner)
-            {
+            if (outcome == SourceExchangeOutcome.Conflict || outcome == SourceExchangeOutcome.UnsavedEditorChanges ||
+                outcome == SourceExchangeOutcome.MixedLanguageOwner)
                 releaseSubmission();
-                return outcome == SourceExchangeOutcome.UnsavedEditorChanges
-                    ? new SourceResult("conflict", "unsaved_editor_changes")
-                    : new SourceResult("unsupported", MixedLanguageOwnerException.ErrorCode);
-            }
+            if (outcome == SourceExchangeOutcome.UnsavedEditorChanges)
+                return new SourceResult("conflict", "unsaved_editor_changes");
+            if (outcome == SourceExchangeOutcome.MixedLanguageOwner)
+                return new SourceResult("unsupported", MixedLanguageOwnerException.ErrorCode);
             var status = outcome == SourceExchangeOutcome.Applied ? "succeeded" :
                 outcome == SourceExchangeOutcome.Conflict ? "conflict" :
                 outcome == SourceExchangeOutcome.Unsupported ? "unsupported" : "unknown";
-            completed(status, request.VerifiedPostStateDigest);
+            if (outcome != SourceExchangeOutcome.Conflict) completed(status, request.VerifiedPostStateDigest);
             var error = status == "succeeded" ? null : "source_exchange_" + status;
             return new SourceResult(status, error, WithSource(new Dictionary<string, object> {
                 { "journalOperationId", preview.JournalId ?? operationId },
@@ -430,14 +448,26 @@ namespace TwinCatMcp.Engineering.Host
             private readonly object gate = new object();
             private int retainedChars;
 
-            internal bool TryReserve(int imageChars)
+            internal bool TryReserve(int chars)
             {
                 lock (gate)
                 {
-                    if (imageChars > MaxRetainedChars - retainedChars) return false;
-                    retainedChars += imageChars;
+                    if (chars > MaxRetainedChars - retainedChars) return false;
+                    retainedChars += chars;
                     return true;
                 }
+            }
+
+            internal void Release(int chars)
+            {
+                lock (gate) retainedChars -= chars;
+            }
+
+            // Short receipts are bounded by the provider's replay slot limit.
+            // An already approved operation must always be able to record its outcome.
+            internal void RetainReceipt(int chars)
+            {
+                lock (gate) retainedChars += chars;
             }
         }
 
@@ -445,7 +475,8 @@ namespace TwinCatMcp.Engineering.Host
         {
             internal string ObjectId, Section, Before, After, BeforeBuffer, AfterBuffer, PreviewId, JournalId, ProjectRevision, StateDigest;
             internal object BufferIdentity;
-            internal bool Consumed;
+            internal int ImageChars;
+            internal bool Published, Consumed;
         }
         private sealed class SourceJournal
         {
