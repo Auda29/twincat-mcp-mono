@@ -5,6 +5,8 @@ import { TextDecoder } from "node:util";
 const HEX = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HANDSHAKE_LIMIT = 4096;
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MAX_TIMEOUT_MS = 130_000;
 // The authenticated frame embeds a JSON payload as a JSON string.
 const PAYLOAD_LIMIT = 1024 * 1024;
 const FRAME_LIMIT = 2 * PAYLOAD_LIMIT;
@@ -67,7 +69,8 @@ export class EngineeringHostClient {
 
   dispose(): void { this.#disposed = true; this.#key.fill(0); }
 
-  async dispatch(request: string): Promise<string> {
+  async dispatch(request: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string> {
+    if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > MAX_TIMEOUT_MS) throw new Error("Invalid host timeout");
     if (this.#disposed) throw new Error("Host client disposed");
     if (Buffer.byteLength(request, "utf8") > PAYLOAD_LIMIT) throw new Error("Host request too large");
     const socket = createConnection(this.#pipe);
@@ -79,7 +82,7 @@ export class EngineeringHostClient {
     socket.on("error", () => { failure = new Error("Host connection failed"); signal(); });
     socket.on("end", () => { failure = new Error("Host connection closed"); signal(); });
     socket.on("close", () => { failure ??= new Error("Host connection closed"); signal(); });
-    const timer = setTimeout(() => { failure = new Error("Host request timed out; outcome may be unknown"); socket.destroy(); signal(); }, 30_000);
+    const timer = setTimeout(() => { failure = new Error("Host request timed out; outcome may be unknown"); socket.destroy(); signal(); }, timeoutMs);
     const read = async (limit: number): Promise<unknown> => {
       for (;;) {
         const newline = pending.indexOf(10);

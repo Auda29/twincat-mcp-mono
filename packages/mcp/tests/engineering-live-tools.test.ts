@@ -19,7 +19,7 @@ const targetOperationId = "c723bb55-c04b-437b-98f8-88d1737b9ad7";
 const selectedBuild = { configuration: "Debug", platform: "TwinCAT RT (x86)" };
 
 function setup(respond?: (request: Record<string, unknown>) => unknown) {
-  const dispatch = vi.fn(async (text: string) => {
+  const dispatch = vi.fn(async (text: string, _timeoutMs: number) => {
     const request = JSON.parse(text) as Record<string, unknown>;
     const args = request.arguments as Record<string, unknown>;
     const owner = args.targetOperationId ?? request.operationId;
@@ -58,9 +58,19 @@ describe("explicit live engineering tools", () => {
     const request = JSON.parse(dispatch.mock.calls[1]![0]);
     expect(request).toMatchObject({ operation: "source.apply", arguments: args, expected: { projectFile: context.projectFile } });
     expect(Date.parse(request.arguments.approvalExpiresUtc)).toBeGreaterThan(Date.now());
+    expect(dispatch.mock.calls.map(([, timeoutMs]) => timeoutMs)).toEqual([30_000, 125_000]);
+    await tool("plc_source_rollback").execute({
+      journalId: targetOperationId,
+      baselineDigest: args.baselineDigest,
+      proposedDigest: args.proposedDigest,
+      projectRevision: args.projectRevision,
+    });
+    const [rollbackRequest, rollbackTimeout] = dispatch.mock.calls[2]!;
+    expect(JSON.parse(rollbackRequest)).toMatchObject({ operation: "source.rollback" });
+    expect(rollbackTimeout).toBe(125_000);
     expect(tool("plc_source_apply").annotations?.destructiveHint).toBe(true);
     await expect(tool("plc_source_apply").execute({ ...args, sessionId: context.sessionId })).rejects.toThrow();
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenCalledTimes(3);
   });
   it("discovers a project without a moniker and can filter to one physical file", async () => {
     const { dispatch, tool } = setup((request) => ({
@@ -97,7 +107,9 @@ describe("explicit live engineering tools", () => {
       returnType: "DINT", access: "PROTECTED", createGet: true, createSet: false, declarationText: "PROPERTY Speed : DINT\r\n" };
     const before = Date.now();
     expect(await create.execute(args)).toMatchObject({ status: "refused", error: "approval_required" });
-    const sent = JSON.parse(dispatch.mock.calls[0]![0]);
+    const [createRequest, createTimeout] = dispatch.mock.calls[0]!;
+    expect(createTimeout).toBe(125_000);
+    const sent = JSON.parse(createRequest);
     expect(sent).toMatchObject({ operation: "source.create", arguments: args });
     const expiry = Date.parse(sent.arguments.approvalExpiresUtc);
     expect(expiry).toBeGreaterThan(before);
@@ -189,6 +201,7 @@ describe("explicit live engineering tools", () => {
     expect(dispatch).toHaveBeenCalledTimes(1);
     const request = JSON.parse(dispatch.mock.calls[0]![0]);
     expect(request).toMatchObject({ protocolVersion: 1, sessionId: context.sessionId, operation: "build.start", arguments: selectedBuild, expected: { idePid: 1234, projectFile: context.projectFile } });
+    expect(dispatch.mock.calls[0]![1]).toBe(125_000);
     expect(request.operationId).toBe(response.operationId);
     expect(Date.parse(request.arguments.approvalExpiresUtc)).toBeGreaterThan(Date.now());
     expect(request.operationId).toMatch(/^[0-9a-f-]{36}$/);
@@ -202,6 +215,7 @@ describe("explicit live engineering tools", () => {
     const { dispatch, tool } = setup();
     const result = await tool(name!).execute({ targetOperationId }) as Record<string, unknown>;
     expect(JSON.parse(dispatch.mock.calls[0]![0])).toMatchObject({ operation, arguments: { targetOperationId } });
+    expect(dispatch.mock.calls[0]![1]).toBe(30_000);
     expect(result.provenance).toMatchObject({ buildOperationId: targetOperationId, dirtyState: "clean" });
     expect(result.result).toMatchObject({ diagnosticsTruncated: true, outputTruncated: true });
     expect(result.output).toBe("build output");

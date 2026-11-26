@@ -650,4 +650,7 @@ of the UTF-8 request string. The response is exactly
 time. No secret is included in frames. Provider request and response payloads
 are capped at 1 MiB each. The authenticated request and response frames are
 capped at 2 MiB each. Handshake frames are capped at 4 KiB. Authentication
-failure closes the connection. A timeout never triggers another dispatch.
+failure closes the connection. The client pipe timeout defaults to 30 seconds.
+MCP dispatch uses 125 seconds for mutations that carry a native approval
+expiry (`build.start`, `source.apply`, `source.rollback`, and `source.create`).
+A timeout never triggers another dispatch.
