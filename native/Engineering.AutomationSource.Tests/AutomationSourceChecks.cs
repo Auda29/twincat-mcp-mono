@@ -443,7 +443,15 @@ internal sealed class AutomationSourceChecks : IDisposable
                 "<Target Name='Modify'><ItemGroup><Compile Include='Other.TcGVL' Exclude='Unrelated.TcGVL'/></ItemGroup></Target>",
                 "<ItemGroup Condition='false'><Folder Include='GVLs'/></ItemGroup>",
                 "<ItemGroup><Compile Include='./GVLs/Globals.TcGVL' Condition='false'/></ItemGroup>",
-                "<ItemGroup><Compile Include='Other/Globals.TcGVL'><Link>GVLs/Globals.TcGVL</Link></Compile></ItemGroup>"
+                "<ItemGroup><Compile Include='Other/Globals.TcGVL'><Link>GVLs/Globals.TcGVL</Link></Compile></ItemGroup>",
+                "<ItemGroup><Compile Include='Other/Globals.TcGVL'><link>GVLs/Globals.TcGVL</link></Compile></ItemGroup>",
+                "<ItemGroup><compile Include='Other/Globals.TcGVL' link='GVLs/Globals.TcGVL'/></ItemGroup>",
+                "<ItemGroup><Folder remove='GVLs'/></ItemGroup>",
+                "<ItemGroup><Folder update='GVLs'/></ItemGroup>",
+                "<ItemGroup><Compile Include='Other/Globals.TcGVL' exclude='Other/Globals.TcGVL'/></ItemGroup>",
+                "<itemgroup condition='false'><Compile include='./GVLs/Globals.TcGVL'/></itemgroup>",
+                "<ItemGroup><Compile include='./GVLs/Globals.TcGVL' condition='false'/></ItemGroup>",
+                "<ItemGroup><Folder Include='Other' include='GVLs'/></ItemGroup>"
             })
             {
                 File.WriteAllText(context.ProjectFile, "<Project>" + attestedFolder + item + "</Project>");
@@ -461,6 +469,8 @@ internal sealed class AutomationSourceChecks : IDisposable
             sibling.PhysicalFile = siblingPath;
             Status(Call("source.create", unverified), "conflict", "target_file_already_exists");
             File.WriteAllText(context.ProjectFile, "<Project><ItemGroup><Compile Include='GVLs/Globals.TcGVL'/></ItemGroup></Project>");
+            Status(Call("source.create", unverified), "conflict", "target_file_already_exists");
+            File.WriteAllText(context.ProjectFile, "<project><itemgroup><folder include='GVLs'/></itemgroup></project>");
             Status(Call("source.create", unverified), "conflict", "target_file_already_exists");
             Expect(approvals.Count == 0 && gvls.CreateCount == 0, "Project evidence and sibling corroboration precede approval");
 

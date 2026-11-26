@@ -289,30 +289,46 @@ namespace TwinCatMcp.Engineering.Host
                     new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = MaxXml }))
                 {
                     var project = XDocument.Load(reader).Root;
-                    if (project == null || project.Name.LocalName != "Project") return false;
+                    if (project == null || !project.Name.LocalName.Equals("Project", StringComparison.OrdinalIgnoreCase)) return false;
                     var ns = project.Name.Namespace;
                     if (ns != XNamespace.None && ns != "http://schemas.microsoft.com/developer/msbuild/2003") return false;
-                    foreach (var item in project.Descendants())
+                    foreach (var item in project.DescendantsAndSelf())
                     {
+                        if (item.Attributes().Where(attribute => attribute.Name.Namespace == XNamespace.None)
+                            .GroupBy(attribute => attribute.Name.LocalName, StringComparer.OrdinalIgnoreCase)
+                            .Any(attributes => attributes.Skip(1).Any())) return false;
+
                         var kind = item.Name.LocalName;
-                        if (kind == "Link" && ReferencesFolder(item.Value, projectDirectory, candidate)) return false;
-                        if (kind != "Folder" && kind != "Compile") continue;
-                        if (item.Attribute("Remove") != null || item.Attribute("Update") != null || item.Attribute("Exclude") != null ||
-                            ReferencesFolder((string)item.Attribute("Link"), projectDirectory, candidate)) return false;
+                        if (kind.Equals("Link", StringComparison.OrdinalIgnoreCase) && ReferencesFolder(item.Value, projectDirectory, candidate)) return false;
+                        if (!kind.Equals("Folder", StringComparison.OrdinalIgnoreCase) &&
+                            !kind.Equals("Compile", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (Attr(item, "Remove") != null || Attr(item, "Update") != null || Attr(item, "Exclude") != null ||
+                            ReferencesFolder(Attr(item, "Link"), projectDirectory, candidate)) return false;
 
                         var group = item.Parent;
-                        if ((group.Name != ns + "ItemGroup" || group.Parent != project ||
-                            group.Attribute("Condition") != null || item.Attribute("Condition") != null) &&
-                            ReferencesFolder((string)item.Attribute("Include"), projectDirectory, candidate)) return false;
+                        if ((group.Parent != project || !IsItemGroup(group, ns) ||
+                            Attr(group, "Condition") != null || Attr(item, "Condition") != null) &&
+                            ReferencesFolder(Attr(item, "Include"), projectDirectory, candidate)) return false;
                     }
                     var folder = string.Join("\\", segments);
-                    var matches = project.Elements(ns + "ItemGroup").Where(group => group.Attribute("Condition") == null)
+                    var matches = project.Elements().Where(group => IsItemGroup(group, ns) && Attr(group, "Condition") == null)
                         .Elements().Select(item => AttestedFolder(item, folder)).Where(include => include != null)
                         .Distinct(StringComparer.Ordinal).ToArray();
                     return matches.Length > 0 && matches.All(include => SameDirectory(candidate, Path.Combine(projectDirectory, include)));
                 }
             }
             catch { return false; }
+        }
+
+        private static bool IsItemGroup(XElement element, XNamespace ns)
+        {
+            return element.Name.Namespace == ns && element.Name.LocalName.Equals("ItemGroup", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string Attr(XElement element, string name)
+        {
+            return (string)element.Attributes().FirstOrDefault(attribute => attribute.Name.Namespace == XNamespace.None &&
+                attribute.Name.LocalName.Equals(name, StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool ReferencesFolder(string paths, string projectDirectory, string candidate)
@@ -332,17 +348,18 @@ namespace TwinCatMcp.Engineering.Host
         private static string AttestedFolder(XElement item, string folder)
         {
             var kind = item.Name.LocalName;
-            if (item.Name.Namespace != item.Parent.Name.Namespace || (kind != "Folder" && kind != "Compile") ||
-                item.Attribute("Condition") != null || item.Attribute("Link") != null ||
+            var isFolder = kind.Equals("Folder", StringComparison.OrdinalIgnoreCase);
+            if (item.Name.Namespace != item.Parent.Name.Namespace || (!isFolder && !kind.Equals("Compile", StringComparison.OrdinalIgnoreCase)) ||
+                Attr(item, "Condition") != null || Attr(item, "Link") != null ||
                 item.Elements().Any(element => element.Name.LocalName.Equals("Link", StringComparison.OrdinalIgnoreCase))) return null;
-            var include = ((string)item.Attribute("Include"))?.Replace('/', '\\');
+            var include = Attr(item, "Include")?.Replace('/', '\\');
             if (string.IsNullOrEmpty(include) || Path.IsPathRooted(include) || include.IndexOfAny(Path.GetInvalidPathChars()) >= 0 ||
                 include.IndexOfAny(new[] { ':', '*', '?', ';', '$', '@', '%' }) >= 0) return null;
-            if (kind == "Folder" && include.EndsWith("\\", StringComparison.Ordinal))
+            if (isFolder && include.EndsWith("\\", StringComparison.Ordinal))
                 include = include.Substring(0, include.Length - 1);
             if (include.Split('\\').Any(segment => segment.Length == 0 || segment == "." || segment == ".." ||
                 segment.EndsWith(".", StringComparison.Ordinal) || segment.Trim() != segment)) return null;
-            if (kind == "Folder") return SameFile(include, folder) ? include : null;
+            if (isFolder) return SameFile(include, folder) ? include : null;
             return include.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase) ? include.Substring(0, folder.Length) : null;
         }
 
