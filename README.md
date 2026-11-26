@@ -12,7 +12,27 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.8 host-scoped Debug reads
+## Engineering 0.5.9 Automation Interface ST Editor
+
+Engineering 0.5.9 adds project-wide Structured Text discovery, approved
+declaration and implementation edits, and approved PLC object creation to the
+authenticated Editor profile. The host supplies the scoped source callbacks and
+three additional authoritative type names through the existing nine-parameter
+factory. Standalone creation requires a verified physical parent. The host
+checks dirty editor state before rollback and reports when newly created files
+still require a project save.
+
+Use the [Engineering 0.5.9 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.9)
+and pin its schema 2 receipt and downloaded assets. Build has 9 tools, Debug
+has 11, and Editor has 16 with the new source creation tool. Build and Debug
+catalog bytes match 0.5.8.
+
+An isolated TwinCAT 3.1.4024.78 x86 probe verified the source operations.
+See [Release Flow](docs/release-flow.md) for the verification limits and the
+release notes for the assembled runtime audit. This GitHub artifact release
+does not publish packages to npm.
+
+## Historical Engineering 0.5.8 host-scoped Debug reads
 
 Engineering 0.5.8 adds nullable `configuredAdsPort` to the bound online project
 observation and lets the trusted native host select `symbolScope: "all"` for
@@ -32,8 +52,8 @@ The release retains 0.5.6's unnamespaced `PlcProjectDef/ProjectPath` XML
 structure reported for TwinCAT 3.1.4024.78 PLC children, alongside `PlcDef`.
 Mixed or duplicate definitions and unverifiable paths still fail closed.
 
-Use the [Engineering 0.5.8 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.8)
-and its own schema 2 integrity receipt. It preserves 0.5.5's factory9 and
+The [Engineering 0.5.8 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.8)
+has its own schema 2 integrity receipt. It preserves 0.5.5's factory9 and
 separate Build (9 tools), Editor (15 tools) and Debug (11 tools) catalogs.
 The Debug catalog descriptions change; pin its new receipt-bound hash.
 The default Build child has no source tools; Editor source access requires
