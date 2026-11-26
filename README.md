@@ -12,7 +12,17 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.9 Automation Interface ST Editor
+## Engineering 0.5.10 native approval timeout
+
+Engineering 0.5.10 gives the authenticated client pipe 125 seconds for build,
+source apply, source rollback, and source create requests that need native
+approval. Other requests keep the 30-second timeout.
+
+Use the [Engineering 0.5.10 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.10)
+and verify the schema 2 receipt and downloaded assets. The Build (9), Editor
+(16), and Debug (11) catalogs match 0.5.9 byte for byte.
+
+## Historical Engineering 0.5.9 Automation Interface ST Editor
 
 Engineering 0.5.9 adds project-wide Structured Text discovery, approved
 declaration and implementation edits, and approved PLC object creation to the
