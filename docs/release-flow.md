@@ -1,6 +1,16 @@
 # Release Flow
 
-## Engineering 0.5.8 release preparation
+## Unreleased Editor profile changes
+
+The Editor catalog gains `plc_source_create` for 16 tools. The Build and Debug
+catalogs retain their 0.5.8 bytes. The Editor provider adds project-wide
+Automation Interface ST discovery and approved source editing and creation.
+The nine-parameter host factory takes three additional authoritative type
+names through its existing callback. See the
+[provider contract](native-engineering-provider-v1.md#editor-profile-source-operations)
+for approval and persistence details.
+
+## Historical Engineering 0.5.8 release
 
 0.5.8 adds configured-port evidence and trusted host all-symbol Debug scope.
 `project.online.configuredAdsPort` is an integer in 851–899 or null from the

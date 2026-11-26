@@ -32,13 +32,40 @@ const startInput = z.object({}).strict();
 const buildInput = z.object({ configuration: z.enum(["Debug", "Release"]), platform: z.enum(["TwinCAT RT (x86)", "TwinCAT RT (x64)"]) }).strict();
 const targetInput = z.object({ targetOperationId: uuid }).strict();
 const sourceInput = z.object({ objectId: z.string().min(1).max(1024), section: z.enum(["declaration", "implementation"]) }).strict();
-const previewInput = sourceInput.extend({ proposedText: z.string().max(16384) }).strict();
+const sourceText = z.string().max(65536);
+const previewInput = sourceInput.extend({ proposedText: sourceText }).strict();
 const digest = z.string().regex(/^[0-9a-f]{64}$/);
 const sourceApprovalInput = z.object({ baselineDigest: digest, proposedDigest: digest, projectRevision: digest }).strict();
 const applyInput = sourceApprovalInput.extend({ previewId: uuid }).strict();
 const rollbackInput = sourceApprovalInput.extend({ journalId: uuid }).strict();
 const journalInput = z.object({ journalId: uuid }).strict();
-const sourceTargetsInput = z.object({ moniker: canonicalPath }).strict();
+const sourceTargetsInput = z.object({ moniker: canonicalPath.optional() }).strict();
+const iecIdentifier = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/);
+const parentPath = z.string().min(1).max(512).regex(/^[^^\\/:\u0000-\u001f\u007f-\u009f|]+(?:\^[^^\\/:\u0000-\u001f\u007f-\u009f|]+)*$/)
+  .refine((value) => value.split("^").every((part) => part === part.trim() && part !== "." && part !== ".."));
+const createInput = z.object({
+  parentPath: parentPath.describe("Relative path in the bound PLC tree, with ^ between segments."),
+  name: iecIdentifier,
+  kind: z.enum(["fb", "prg", "fun", "method", "action", "property", "dut_struct", "gvl"]),
+  returnType: iecIdentifier.optional().describe("Required for fun, method and property. Omit for other kinds."),
+  access: z.enum(["PUBLIC", "PRIVATE", "PROTECTED", "INTERNAL"]).optional().describe("Method or property access. The provider defaults to PUBLIC."),
+  createGet: z.boolean().optional().describe("Create the property Get accessor."),
+  createSet: z.boolean().optional().describe("Create the property Set accessor."),
+  declarationText: sourceText.optional().describe("Initial declaration. Omit for actions."),
+  implementationText: sourceText.optional().describe("Initial implementation. Omit for properties, DUT structs and GVLs."),
+}).strict().superRefine((args, ctx) => {
+  const issue = (field: string, message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message });
+  const memberWithType = args.kind === "method" || args.kind === "property";
+  if ((memberWithType || args.kind === "fun") !== (args.returnType !== undefined)) issue("returnType", "Return type is required only for fun, method and property.");
+  if (!memberWithType && args.access !== undefined) issue("access", "Access is valid only for method and property.");
+  if (args.kind !== "property") {
+    if (args.createGet !== undefined) issue("createGet", "Get is valid only for properties.");
+    if (args.createSet !== undefined) issue("createSet", "Set is valid only for properties.");
+  }
+  if (args.kind === "action" && args.declarationText !== undefined) issue("declarationText", "Actions have no declaration section.");
+  if (["dut_struct", "gvl", "property"].includes(args.kind) && args.implementationText !== undefined)
+    issue("implementationText", "This kind has no implementation section.");
+});
 const responseSchema = z.object({
   protocolVersion: z.literal(1),
   sessionId: uuid,
@@ -68,7 +95,7 @@ export function createLiveEngineeringToolDefinitions(
     try {
       // Exactly one dispatch. In particular, an unknown submission is not retried.
       const text = await dispatch(request);
-      if (Buffer.byteLength(text, "utf8") > 512 * 1024) throw new Error("Oversized response");
+      if (Buffer.byteLength(text, "utf8") > (operation.startsWith("source.") ? 1024 : 512) * 1024) throw new Error("Oversized response");
       const response = responseSchema.parse(JSON.parse(text));
       if (response.sessionId !== sessionId || response.operationId !== operationId) throw new Error("Response binding mismatch");
       const result = response.result;
@@ -89,7 +116,9 @@ export function createLiveEngineeringToolDefinitions(
       return {
         protocolVersion: 1, sessionId, operationId, status: "unknown",
         provenance: { context, observedAt: new Date().toISOString(), source: "unknown", dirtyState: "unknown", ...(operation.startsWith("source.") ? {} : { buildOperationId: target }) },
-        error: operation.startsWith("source.")
+        error: operation === "source.create"
+          ? "Creation outcome could not be verified. Inspect source targets before taking further action. Do not retry the submission."
+          : operation.startsWith("source.")
           ? "Source outcome could not be verified. Retain the operation ID and query its journal if submitted; do not retry a mutation."
           : operation === "session.describe" || operation === "project.association"
           ? "Host observation could not be verified."
@@ -139,12 +168,13 @@ export function createLiveEngineeringToolDefinitions(
     read("tc_output_read", "TwinCAT Live Build Output", "output.read", "Read bounded output belonging to the explicit build operation, preserving provider provenance and truncation indicators. Filters are unsupported."),
     read("tc_operation_get", "TwinCAT Live Operation Status", "operation.get", "Query the explicit build operation without waiting for completion or submitting another build."),
     read("tc_operation_cancel", "TwinCAT Live Operation Cancel", "operation.cancel", "Request best-effort cancellation of the explicit build operation. An unknown outcome does not prove the IDE stopped; query the same operation to resolve it.", true),
-    source("plc_source_targets", "source.targets", sourceTargetsInput, "Discover existing POU/method/action IDs and sections verified in the exact already-open TcPOU XML buffer or attached TwinCAT ST editor. Pass the canonical physical TcPOU filename. Does not open or modify a document."),
-    source("plc_source_read", "source.read", sourceInput, "Read an exact supported ST/declaration section from its already-open XML buffer or attached TwinCAT ST editor, preserving live text, dirty state and digests."),
-    source("plc_source_preview", "source.preview", previewInput, "Prepare an exact before/proposed section diff without changing source or granting approval. XML buffers may return a mutation-ready preview; customStReadOnly results never authorize apply and return no mutation preview ID."),
-    source("plc_source_apply", "source.apply", applyInput, "Apply one exact preview after separate single-use native target/diff approval and current baseline recheck. Does not save. Unknown outcomes must not be retried.", true),
-    source("plc_source_rollback", "source.rollback", rollbackInput, "Restore a journaled pre-image after separate native approval, only if the current whole buffer equals its exact post-image. Does not save.", true),
-    source("plc_source_journal", "source.journal", journalInput, "Read the retained session-memory journal, including unknown outcomes. Journals do not survive provider disposal or restart."),
+    source("plc_source_targets", "source.targets", sourceTargetsInput, "Discover supported Structured Text targets across the bound PLC project. Omit moniker to list up to 512 targets, or pass a canonical physical filename to filter and prefer its open XML buffer."),
+    source("plc_source_read", "source.read", sourceInput, "Read a section by target ID. Automation Interface text uses LF line endings. Open XML buffers and attached read-only TwinCAT text editors report their own live text."),
+    source("plc_source_preview", "source.preview", previewInput, "Prepare exact before and proposed ST source for native approval without changing any text. Automation Interface and open XML previews can authorize apply. Attached read-only editor results have no mutation preview ID."),
+    source("plc_source_apply", "source.apply", applyInput, "Apply a single-use preview after native approval and an exact baseline check. Automation Interface edits may persist to disk and refuse unverified unsaved editor changes. Open XML edits stay in the buffer. Do not retry unknown outcomes.", true),
+    source("plc_source_rollback", "source.rollback", rollbackInput, "Restore a journaled pre-image after native approval and an exact post-image check. Automation Interface rollback may persist to disk. Open XML rollback stays in the buffer.", true),
+    source("plc_source_journal", "source.journal", journalInput, "Read the retained session-memory journal, including unknown apply outcomes. Journals do not survive provider disposal or restart."),
+    source("plc_source_create", "source.create", createInput, "Create an ST PLC object in the bound project after native approval. TwinCAT writes the object file, or changes its owning POU file, while project changes remain pending in the IDE. Do not retry unknown outcomes.", true),
   ];
   // Build-mode callers retain the nine-tool catalog. The authenticated Editor
   // child can publish source definitions. The host still authorizes operations

@@ -22,7 +22,7 @@ namespace TwinCatMcp.Engineering.Host
     // All calls must run on the editor-owning thread.
     internal sealed class CustomStReader
     {
-        private const int MaxProject = 2 * 1024 * 1024, MaxText = 16384;
+        private const int MaxProject = 2 * 1024 * 1024, MaxText = 65536;
         private readonly string project, directory, context;
         private int? pinnedProjectHandle;
         private readonly object gate = new object();
@@ -132,7 +132,7 @@ namespace TwinCatMcp.Engineering.Host
                     if (finalBytes == null || Hash(finalBytes) != projectRevision || !Member(finalBytes, moniker) || dirty(project) != false || !Context()) return null;
                 }
                 return new SourceResult("succeeded", result: new Dictionary<string, object> { { "moniker", moniker }, { "targets", rows.ToArray() }, { "count", rows.Count },
-                    { "truncated", false }, { "sourceMode", "customStReadOnly" }, { "identitySource", "persistedObjectMetadataAndNativeView" }, { "applySupported", false }, { "source", "liveBuffer" }, { "dirtyState", observedDirty }, { "projectRevision", projectRevision } });
+                    { "truncated", false }, { "sourceMode", "customStReadOnly" }, { "identitySource", "persistedObjectMetadataAndNativeView" }, { "applySupported", false }, { "source", "liveAttachedDocument" }, { "dirtyState", observedDirty }, { "projectRevision", projectRevision } });
             } catch { return null; }
         }
         private static bool Valid(string text) { if (text == null || text.Length > MaxText || text.IndexOf('\0') >= 0) return false; try { new UTF8Encoding(false, true).GetByteCount(text); return true; } catch { return false; } }
