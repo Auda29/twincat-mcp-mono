@@ -1,10 +1,10 @@
 param(
-    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/engineering-release-0.5.8')
+    [string]$OutputDir = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/engineering-release-0.5.9')
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
-$version = '0.5.8'
+$version = '0.5.9'
 $tag = "engineering-v$version"
 
 function Invoke-Checked([string]$Command, [string[]]$Arguments) {

@@ -1,6 +1,6 @@
 # Release Flow
 
-## Unreleased Editor profile changes
+## Engineering 0.5.9 Automation Interface ST Editor
 
 The Editor catalog gains `plc_source_create` for 16 tools. The Build and Debug
 catalogs match the published 0.5.8 assets byte for byte. The Editor catalog
@@ -16,6 +16,33 @@ The nine-parameter host factory takes three additional authoritative type
 names through its existing callback. See the
 [provider contract](native-engineering-provider-v1.md#editor-profile-source-operations)
 for approval and persistence details.
+
+The isolated TwinCAT 3.1.4024.78 x86 probe passed discovery, reads, edits with
+the ST editor closed and open, the dirty rollback guard, rollback after save
+and all supported creation kinds. The provider refused the stock project's
+build with `unsafe_build_project` because the generated `.plcproj` lacked
+the required import. A direct DTE control build completed with zero failed
+projects. The out-of-process probe could resolve the closed-file hierarchy
+interface, but its dirty-state call returned `E_POINTER`.
+
+### Build and verify the 0.5.9 artifacts
+
+Build from a clean, committed checkout with `scripts/Build-EngineeringRelease.ps1`.
+The builder compiles the x86 .NET Framework 4.7.2 helper and verifies factory9
+and the exact schemas returned by the three packaged child modes against a
+synthetic Windows named pipe.
+
+| Owned child flag | Catalog asset | Tools |
+| --- | --- | --- |
+| `--host-bootstrap-stdin` | `engineering-catalog.json` | 9 build, session and diagnostic tools |
+| `--host-editor-bootstrap-stdin` | `engineering-editor-catalog.json` | 16 tools including source operations |
+| `--host-debug-bootstrap-stdin` | `engineering-debug-catalog.json` | 11 tools including read-only PLC observations |
+
+Pin the schema 2 receipt and each downloaded asset from the
+[0.5.9 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.9).
+Run the production audit on the assembled Core/MCP runtime and record the
+advisories in the release notes. The dependency graph retains the Zod 3 and
+fast-xml-parser versions flagged in 0.5.8.
 
 ## Historical Engineering 0.5.8 release
 
@@ -43,8 +70,7 @@ keeps the 0.5.5 protocol, native factory, profile boundaries and dependency grap
 The residual dependency advisories documented for 0.5.5 remain open; the final
 release notes report the assembled artifact's audit rather than assuming it clean.
 
-Build from a clean, committed checkout with `scripts/Build-EngineeringRelease.ps1`.
-The builder uses the locked Node.js dependencies and compiles the x86 .NET
+For 0.5.8, the builder uses the locked Node.js dependencies and compiles the x86 .NET
 Framework 4.7.2 helper. It reflects the exact factory signature in the helper
 and runs the three assembled child modes against a synthetic Windows named pipe.
 Each mode must return the exact tool schemas in its catalog before the builder
