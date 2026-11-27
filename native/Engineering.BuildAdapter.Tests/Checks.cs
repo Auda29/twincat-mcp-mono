@@ -112,6 +112,13 @@ static class Checks
                 context.PlatformName = "TwinCAT RT (x86)"; Refused(() => adapter.Prepare(sln, plc, _ => false), "build_configuration_mismatch"); context.PlatformName = "TwinCAT RT (x64)";
                 dependency.RequiredProjects = new object[] { new object() }; Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependencies_not_supported");
                 dependency.RequiredProjects = null; Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependencies_not_supported"); dependency.RequiredProjects = new object[0];
+                Refused(() => adapter.Prepare(sln, plc, null), "unknown_dirty_state");
+                foreach (var path in new[] { plc, sln, tsproj })
+                {
+                    Refused(() => adapter.Prepare(sln, plc, file => file == path), "unsaved_project_changes");
+                    Refused(() => adapter.Prepare(sln, plc, file => file == path ? (bool?)null : false), "unknown_dirty_state");
+                }
+                Refused(() => adapter.Prepare(sln, plc, file => file == plc ? (bool?)null : file == tsproj), "unsaved_project_changes");
                 document.Saved = false; Refused(() => adapter.Prepare(sln, plc, _ => false), "dirty_or_unknown_document"); document.Saved = true;
                 Refused(() => adapter.Prepare(sln, plc, path => path == document.FullName ? (bool?)null : false), "dirty_or_unknown_document");
                 Require(build.Calls == 1, "rejected cases do not submit build");

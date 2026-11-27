@@ -383,6 +383,12 @@ reports `capabilities.plcBuild: "supported"` with `result.configuration`,
 `result.platform`, `buildScope: "plcProject"` and `targetProjectFile` equal to
 the bound PLC project. The submitted strings must match before and after native
 approval. A supported preflight is not evidence that a real build completed.
+The project file dirty check reports `unsaved_project_changes` in
+`session.describe.result.buildUnavailableReason` when the host confirms unsaved
+changes in the `.plcproj`, `.sln` or owning `.tsproj`, even if another file's
+state is unknown. With no confirmed changes, a missing dirty callback or an
+unknown state for any of these files yields `unknown_dirty_state`. Both
+reasons refuse the build.
 
 `project.association` takes empty `arguments` and observes the injected DTE
 solution. It reports `solutionFile`, `plcProjectFile`, `twinCatProjectFile`
