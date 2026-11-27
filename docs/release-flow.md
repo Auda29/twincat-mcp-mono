@@ -1,17 +1,25 @@
 # Release Flow
 
-## Engineering 0.5.11 release receipt alignment
+## Engineering 0.5.12 read-only Debug waits and watches
 
-Build from a clean, committed checkout with `scripts/Build-EngineeringRelease.ps1`.
+The Debug catalog grows from 11 to 15 tools. Wait and watch operations use the
+host-bound grant, sanitize scalar values, and bound teardown. Build preflight
+short-circuits each file's dirty checks and reports `unsaved_project_changes`
+for confirmed changes or `unknown_dirty_state` when the evidence is incomplete.
+
+Build from the clean, merged commit with `scripts/Build-EngineeringRelease.ps1`.
 The builder hashes `git archive --format=tar <release-commit> native/Engineering.Host`
-for `receipt.module.sourceTreeSha256`. Git includes commit metadata in the archive,
-so consumers must use the commit recorded in `sourceCommit`.
+for `receipt.module.sourceTreeSha256`. Reproduce that hash using the exact
+`sourceCommit` recorded in the receipt.
 
-Engineering 0.5.11 retains the 0.5.10 runtime behavior and native host source.
-The Build (9), Editor (16), and Debug (11) catalogs match 0.5.10 byte for byte.
+| Profile | Catalog asset | Tools |
+| --- | --- | ---: |
+| Build | `engineering-catalog.json` | 9 |
+| Editor | `engineering-editor-catalog.json` | 16 |
+| Debug | `engineering-debug-catalog.json` | 15 |
 
 Pin the schema 2 receipt and each downloaded asset from the
-[0.5.11 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.11).
+[0.5.12 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.12).
 Record the assembled Core/MCP runtime audit in the release notes.
 
 ## Historical Engineering 0.5.9 Automation Interface ST Editor

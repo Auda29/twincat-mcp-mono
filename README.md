@@ -12,16 +12,16 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.11 release receipt alignment
+## Engineering 0.5.12 read-only Debug waits and watches
 
-Engineering 0.5.11 records the SHA-256 of the release commit's own
-Git archive of `native/Engineering.Host` in `receipt.module.sourceTreeSha256`.
-It retains the 0.5.10 runtime behavior and native host source, including
-the 125-second client timeout for requests that require native approval.
+Engineering 0.5.12 adds four tools to the host-bound Debug profile:
+`plc_debug_wait_until`, `plc_debug_watch`, `plc_debug_unwatch`, and
+`plc_debug_list_watches`. Build preflight now distinguishes confirmed unsaved
+project changes from unavailable dirty-state evidence.
 
-Use the [Engineering 0.5.11 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.11)
-and verify the schema 2 receipt and downloaded assets. The Build (9), Editor
-(16), and Debug (11) catalogs match 0.5.10 byte for byte.
+Use the [Engineering 0.5.12 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.12)
+and verify the schema 2 receipt and downloaded assets. The Build, Editor, and
+Debug catalogs contain 9, 16, and 15 tools respectively.
 
 ## Historical Engineering 0.5.9 Automation Interface ST Editor
 
