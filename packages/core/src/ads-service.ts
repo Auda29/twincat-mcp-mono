@@ -1180,7 +1180,7 @@ export class AdsService {
   #connectPromise: Promise<AdsClientConnection> | undefined;
   #symbolsLoaded = false;
   #writeMode: PlcWriteMode = "read-only";
-  #watchGeneration = 0;
+  #disconnectGeneration = 0;
   private readonly config: ExtensionRuntimeConfig;
   private readonly runtimeDiagnostics: RuntimeDiagnostics;
 
@@ -1265,30 +1265,47 @@ export class AdsService {
   }
 
   async connect(): Promise<AdsClientConnection> {
-    if (this.#client.connection.connected) {
-      return this.#client.connection;
-    }
-
     if (this.#connectPromise) {
       return this.#connectPromise;
     }
 
+    if (this.#client.connection.connected) {
+      return this.#client.connection;
+    }
+
+    const generation = this.#disconnectGeneration;
+    const assertCurrent = () => {
+      if (generation !== this.#disconnectGeneration) {
+        throw new Error("ADS connection was closed.");
+      }
+    };
     this.#state = "connecting";
     this.#connectPromise = (async () => {
       try {
-        const connection = await this.#client.connect();
+        const connection = await this.#client.connect().finally(async () => {
+          // The transport can become connected after disconnect saw it as offline.
+          if (generation !== this.#disconnectGeneration && this.#client.connection.connected) {
+            await this.#client.disconnect();
+          }
+        });
+        assertCurrent();
 
         await this.#client.cacheSymbols();
+        assertCurrent();
         await this.#client.cacheDataTypes();
+        assertCurrent();
         await this.#loadSymbolCache();
+        assertCurrent();
 
         this.#state = "connected";
         this.#lastError = undefined;
         return connection;
       } catch (error) {
-        this.#state = "degraded";
-        this.#lastError =
-          error instanceof Error ? error : new Error(String(error));
+        if (generation === this.#disconnectGeneration) {
+          this.#state = "degraded";
+          this.#lastError =
+            error instanceof Error ? error : new Error(String(error));
+        }
         throw error;
       } finally {
         this.#connectPromise = undefined;
@@ -1299,18 +1316,32 @@ export class AdsService {
   }
 
   async disconnect(): Promise<void> {
-    this.#watchGeneration++;
+    this.#disconnectGeneration++;
     this.#watchRegistrations.clear();
     const watchEntries = [...this.#watchCache.values()];
     const cleanupErrors: Error[] = [];
-
-    for (const watch of watchEntries) {
+    let watchCleanupTimedOut = false;
+    if (watchEntries.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>(resolve => {
+        timer = setTimeout(() => {
+          watchCleanupTimedOut = true;
+          resolve();
+        }, this.dependencies.waitCleanupTimeoutMs ?? 2_000).unref();
+      });
+      const cleanup = Promise.allSettled(watchEntries.map(async watch => {
+        try {
+          await this.#client.unsubscribe(watch.subscription);
+        } catch (error) {
+          cleanupErrors.push(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+      }));
       try {
-        await this.#client.unsubscribe(watch.subscription);
-      } catch (error) {
-        cleanupErrors.push(
-          error instanceof Error ? error : new Error(String(error)),
-        );
+        await Promise.race([cleanup, deadline]);
+      } finally {
+        clearTimeout(timer);
       }
     }
 
@@ -1325,13 +1356,12 @@ export class AdsService {
     }
 
     this.#watchCache.clear();
-    this.#handleCache.clear();
-    this.#symbolCache.clear();
-    this.#symbolsLoaded = false;
+    this.#invalidateRuntimeCaches();
 
-    if (this.#client.connection.connected) {
+    if (watchCleanupTimedOut || this.#client.connection.connected) {
       try {
-        await this.#client.disconnect();
+        // A graceful ADS disconnect retries any subscriptions still active.
+        await this.#client.disconnect(watchCleanupTimedOut);
       } catch (error) {
         cleanupErrors.push(
           error instanceof Error ? error : new Error(String(error)),
@@ -1906,9 +1936,9 @@ export class AdsService {
       readonly maxDelayMs?: number;
     },
   ): Promise<PlcWatchRegistration> {
-    const generation = this.#watchGeneration;
+    const generation = this.#disconnectGeneration;
     await this.connect();
-    if (generation !== this.#watchGeneration) throw new Error("PLC watch registration was closed.");
+    if (generation !== this.#disconnectGeneration) throw new Error("PLC watch registration was closed.");
 
     const existing = this.#watchCache.get(name);
     if (existing) {
@@ -1969,8 +1999,6 @@ export class AdsService {
     if (symbolNames.length === 0) {
       throw new Error("PLC wait condition must reference at least one symbol.");
     }
-
-    await this.connect();
 
     const startedAtTime = Date.now();
     const startedAt = new Date(startedAtTime).toISOString();
@@ -2118,12 +2146,9 @@ export class AdsService {
       };
 
       const subscribe = async (): Promise<void> => {
-        if (input.signal?.aborted) {
-          finish("cancelled");
-          return;
-        }
-
-        input.signal?.addEventListener("abort", abortHandler, { once: true });
+        if (settled || input.signal?.aborted) return;
+        await this.connect();
+        if (settled || input.signal?.aborted) return;
 
         try {
           for (const name of symbolNames) {
@@ -2170,11 +2195,17 @@ export class AdsService {
         }
       };
 
-      runOperation(subscribe);
+      if (input.signal?.aborted) {
+        abortHandler();
+      } else {
+        input.signal?.addEventListener("abort", abortHandler, { once: true });
+        runOperation(subscribe);
+      }
     });
   }
 
   async unwatchValue(name: string): Promise<PlcWatchSnapshot> {
+    this.#watchRegistrations.delete(name);
     const entry = this.#watchCache.get(name);
     if (!entry) {
       return {
@@ -2419,7 +2450,9 @@ export class AdsService {
   }
 
   async #loadSymbolCache(): Promise<void> {
+    const generation = this.#disconnectGeneration;
     const symbols = await this.#client.getSymbols();
+    if (generation !== this.#disconnectGeneration) return;
     this.#symbolCache.clear();
     this.#symbolLookupCache.clear();
 

@@ -263,8 +263,8 @@ export function createDebugLiveTools(
         return { status: "online_session_not_verified" };
       if (!target || shutdown?.aborted || JSON.stringify(target) !== latestIdentity ||
           (previous && previous !== watchSession) || (reportRevocation && watchContextChanged)) {
-        if (reportRevocation && !watchSession) watchContextChanged = false;
         await watchCleanup;
+        if (!watchSession) watchContextChanged = false;
         return { status: "online_context_changed" };
       }
       if (watchSession?.reader.hasActiveConnection === false) {
@@ -273,7 +273,7 @@ export function createDebugLiveTools(
         return { status: "live_read_unavailable" };
       }
       const result = await run(target);
-      if (reportRevocation && result.status === "online_context_changed" && !watchSession) watchContextChanged = false;
+      if (result.status === "online_context_changed" && !watchSession) watchContextChanged = false;
       return result;
     } catch {
       if (watchSession) closeWatches(watchSession);

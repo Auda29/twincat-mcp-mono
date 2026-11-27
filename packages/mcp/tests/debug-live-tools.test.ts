@@ -353,6 +353,58 @@ describe("bound Debug ADS waits", () => {
     },
   );
 
+  it.each(["timeout", "revocation"] as const)(
+    "stops the grant monitor and releases the read slot on %s during ADS connect",
+    async trigger => {
+      vi.useFakeTimers();
+      const { wait, read, invoke, waitUntil, disconnect: disconnectReader } = setup(undefined, 50);
+      const config = normalizeTwinCatAdsConfig({ targetAmsNetId: grant.amsNetId, readOnly: true });
+      const service = new AdsService(config, { autoReconnect: false, waitCleanupTimeoutMs: 25 });
+      const { client } = service;
+      const connecting = deferred<void>();
+      const connect = vi.spyOn(client, "connect").mockImplementation(async () => {
+        await connecting.promise;
+        Object.assign(client.connection, { connected: true });
+        return client.connection;
+      });
+      const disconnect = vi.spyOn(client, "disconnect").mockImplementation(async () => {
+        Object.assign(client.connection, { connected: false });
+      });
+      const cacheSymbols = vi.spyOn(client, "cacheSymbols").mockResolvedValue(undefined);
+      vi.spyOn(client, "cacheDataTypes").mockResolvedValue(undefined);
+      vi.spyOn(client, "getSymbols").mockResolvedValue({});
+      const subscribe = vi.spyOn(client, "subscribeValue").mockResolvedValue({
+        latestData: { value: true, timestamp: new Date(observation.timestamp) },
+      } as Awaited<ReturnType<typeof client.subscribeValue>>);
+      waitUntil.mockImplementationOnce(service.waitUntil.bind(service));
+      disconnectReader.mockImplementationOnce(service.disconnect.bind(service));
+
+      const revoking = trigger === "revocation";
+      const pending = wait.execute({ ...waitArgs, timeoutMs: revoking ? 10_000 : 100 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(connect).toHaveBeenCalledOnce();
+      if (revoking) invoke.mockResolvedValue(response(null));
+      await vi.advanceTimersByTimeAsync((revoking ? 2_000 : 100) + 25);
+      expect(disconnectReader).toHaveBeenCalledOnce();
+      expect(vi.getTimerCount()).toBe(0);
+
+      if (revoking) {
+        expect(await pending).toEqual({ status: "online_context_changed" });
+        invoke.mockResolvedValue(response({ ...grant, grantId: randomUUID() }));
+      } else {
+        expect(await pending).toMatchObject({ status: "succeeded", waitStatus: "timeout", durationMs: 100 });
+      }
+      expect(await read.execute({ symbols: [condition.name] })).toMatchObject({ status: "succeeded" });
+
+      connecting.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(cacheSymbols).not.toHaveBeenCalled();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(service.hasActiveConnection).toBe(false);
+    },
+  );
+
   it("stops a stuck grant monitor and releases the read slot without returning samples", async () => {
     vi.useFakeTimers();
     const { wait, read, invoke, waitUntil, disconnect } = setup(undefined, 50);
@@ -514,10 +566,25 @@ describe("bound Debug ADS watches", () => {
       expect(session.disconnect).toHaveBeenCalledOnce();
       expect(session.activeWatches.size).toBe(0);
       const next = await session.list.execute({});
-      if (key === "unwatch" || key === "list") expect(next).toMatchObject({ status: "succeeded", count: 0 });
+      if (key === "watch" || key === "unwatch" || key === "list")
+        expect(next).toMatchObject({ status: "succeeded", count: 0 });
       else expect(next).toEqual({ status: "online_context_changed" });
     },
   );
+
+  it.each(["watch", "unwatch", "list"] as const)("reports logout once through %s", async key => {
+    const session = setup();
+    const symbol = { name: condition.name };
+    await session.watch.execute(symbol);
+    session.invoke.mockResolvedValue(response(null));
+    const args = key === "list" ? {} : symbol;
+
+    expect(await session[key].execute(args)).toEqual({ status: "online_context_changed" });
+    expect(await session[key].execute(args)).toEqual({ status: "online_session_not_verified" });
+    expect(await session.watch.execute(symbol)).toEqual({ status: "online_session_not_verified" });
+    expect(session.disconnect).toHaveBeenCalledOnce();
+    expect(session.open).toHaveBeenCalledOnce();
+  });
 
   it("reports an unverified online session when there have been no watches", async () => {
     const { list, unwatch, watch, open } = setup(vi.fn().mockResolvedValue(response(null)));

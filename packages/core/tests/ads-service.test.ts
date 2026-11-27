@@ -603,6 +603,36 @@ describe("AdsService", () => {
     await service.disconnect();
   });
 
+  it("cancels a pending watch registration when the symbol is unwatched", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+    });
+    const client = getMockClientByPort(851)!;
+    const subscribe = client.subscribeValue.bind(client);
+    let start!: () => void;
+    let resume!: () => void;
+    const started = new Promise<void>(resolve => { start = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    const subscribeSpy = vi.spyOn(client, "subscribeValue").mockImplementationOnce(async (...args) => {
+      start();
+      await gate;
+      return subscribe(...args);
+    });
+    const unsubscribe = vi.spyOn(client, "unsubscribe");
+
+    const registration = service.watchSymbol("MAIN.watch");
+    await started;
+    expect(await service.unwatchValue("MAIN.watch")).toMatchObject({ active: false });
+    resume();
+
+    await expect(registration).rejects.toThrow("PLC watch registration was closed.");
+    expect(unsubscribe).toHaveBeenCalledExactlyOnceWith(await subscribeSpy.mock.results[0]!.value);
+    expect(service.listWatches()).toEqual([]);
+    await service.disconnect();
+  });
+
   it("disconnects active watches while a registration is pending and removes the late subscription", async () => {
     const { AdsService } = await import("../src/ads-service.js");
     const service = new AdsService({
@@ -629,6 +659,39 @@ describe("AdsService", () => {
     await expect(registration).rejects.toThrow("PLC watch registration was closed.");
     expect(mockState.unsubscribeCalls).toBe(2);
     expect(service.listWatches()).toEqual([]);
+  });
+
+  it("disconnects transport clients when an active watch unsubscribe stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const { AdsService } = await import("../src/ads-service.js");
+      const service = new AdsService({
+        connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+        writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+      }, { waitCleanupTimeoutMs: 25 });
+      const client = getMockClientByPort(851)!;
+      const disconnect = vi.spyOn(client, "disconnect");
+      const disconnectNc = vi.spyOn(service.getServiceClient("nc"), "disconnect");
+      await service.connectService("nc");
+      await service.watchSymbol("MAIN.watch");
+      await service.watchSymbol("MAIN.value");
+      const unsubscribe = vi.spyOn(client, "unsubscribe").mockReturnValueOnce(new Promise(() => {}));
+
+      const closing = service.disconnect();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(unsubscribe).toHaveBeenCalledTimes(2);
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(disconnectNc).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(disconnect).toHaveBeenCalledExactlyOnceWith(true);
+      expect(disconnectNc).toHaveBeenCalledOnce();
+      await closing;
+      expect(service.listWatches()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rebinds watch subscriptions after reconnect", async () => {
@@ -1450,6 +1513,57 @@ describe("AdsService", () => {
       }
     },
   );
+
+  it.each([
+    { blocked: "connect", status: "timeout" },
+    { blocked: "connect", status: "cancelled" },
+    { blocked: "cacheSymbols", status: "timeout" },
+    { blocked: "cacheSymbols", status: "cancelled" },
+  ] as const)("returns $status when ADS $blocked stalls and drains a late connection", async ({ blocked, status }) => {
+    vi.useFakeTimers();
+    try {
+      const { AdsService } = await import("../src/ads-service.js");
+      const service = new AdsService({
+        connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+        writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 8,
+      }, { waitCleanupTimeoutMs: 25 });
+      const client = getMockClientByPort(851)!;
+      let resume!: () => void;
+      const gate = new Promise<void>(resolve => { resume = resolve; });
+      const operation = client[blocked].bind(client);
+      const stall = vi.spyOn(client, blocked).mockImplementationOnce(async () => {
+        await gate;
+        return operation();
+      });
+      const subscribe = vi.spyOn(client, "subscribeValue");
+      const disconnect = vi.spyOn(client, "disconnect");
+      const controller = new AbortController();
+      let completed = false;
+      const wait = service.waitUntil({
+        condition: { name: "MAIN.watch", operator: "equals", value: true },
+        timeoutMs: 100, signal: controller.signal,
+      }).then(result => { completed = true; return result; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(stall).toHaveBeenCalledOnce();
+
+      if (status === "cancelled") controller.abort();
+      await vi.advanceTimersByTimeAsync(status === "cancelled" ? 25 : 125);
+      expect(completed).toBe(true);
+      await expect(wait).resolves.toMatchObject({ status, values: [] });
+      await service.disconnect();
+      expect(disconnect).toHaveBeenCalledTimes(blocked === "cacheSymbols" ? 1 : 0);
+
+      resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(subscribe).not.toHaveBeenCalled();
+      expect(service.hasActiveConnection).toBe(false);
+      expect(service.state).toBe("disconnected");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("attempts to unsubscribe a late wait registration even if that cleanup rejects", async () => {
     vi.useFakeTimers();
