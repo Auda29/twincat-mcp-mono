@@ -20,6 +20,8 @@ describe("engineering child host handshake", () => {
     const mac = (domain: string, clientNonce: string, payload?: string) => createHmac("sha256", key).update(
       `TCMCP1\n${domain}\n${sessionId}\n${serverNonce}\n${clientNonce}${payload === undefined ? "" : `\n${createHash("sha256").update(payload).digest("hex")}`}`,
     ).digest("hex");
+    const approvedSymbol = "MAIN.fixtureApproved";
+    const grant = { loggedIn: true, grantId: randomUUID(), amsNetId: "1.2.3.4.5.6", adsPort: 856, symbols: [approvedSymbol] };
     const server = createServer((socket) => {
       socket.write(JSON.stringify({ protocolVersion: 1, sessionId, serverNonce }) + "\n");
       let buffer = ""; let clientNonce = ""; let stage = 0;
@@ -36,7 +38,7 @@ describe("engineering child host handshake", () => {
             if (frame.proof !== mac("request", clientNonce, frame.request)) { socket.destroy(); return; }
             const request = JSON.parse(frame.request);
             const response = JSON.stringify({ protocolVersion: 1, sessionId, operationId: request.operationId, status: "succeeded", provenance: {},
-              result: { contextValidated: true, capabilities: { plcBuild: "unsupported" } } });
+              result: request.operation === "debug.context" ? grant : { contextValidated: true, capabilities: { plcBuild: "unsupported" } } });
             socket.end(JSON.stringify({ response, proof: mac("response", clientNonce, response) }) + "\n");
           }
         }
@@ -61,7 +63,7 @@ describe("engineering child host handshake", () => {
       for (const [arg, count, catalog] of [
         ["--host-bootstrap-stdin", 9, "engineering-catalog.json"],
         ["--host-editor-bootstrap-stdin", 16, "engineering-editor-catalog.json"],
-        ["--host-debug-bootstrap-stdin", 11, "engineering-debug-catalog.json"],
+        ["--host-debug-bootstrap-stdin", 15, "engineering-debug-catalog.json"],
       ] as const) {
         const child = spawn(process.execPath, [entry, arg], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
         const terminated = once(child, "exit");
@@ -92,14 +94,42 @@ describe("engineering child host handshake", () => {
           expect(new Set(names).size).toBe(count);
           expect(names.includes("plc_source_apply")).toBe(count === 16);
           expect(names.includes("plc_source_create")).toBe(count === 16);
-          expect(names.includes("plc_debug_read")).toBe(count === 11);
+          const debugNames = ["plc_debug_state", "plc_debug_read", "plc_debug_wait_until",
+            "plc_debug_watch", "plc_debug_unwatch", "plc_debug_list_watches"];
+          expect(tools).toHaveLength(count);
+          expect(names.filter((name: string) => name.startsWith("plc_debug_"))).toEqual(count === 15 ? debugNames : []);
+          if (count === 15) {
+            for (const tool of tools.filter((tool: { name: string }) => debugNames.includes(tool.name))) {
+              expect(tool.annotations).toEqual({ readOnlyHint: true, openWorldHint: false });
+              expect(tool.inputSchema).toMatchObject({ type: "object", additionalProperties: false });
+            }
+            const call = async (name: string, args: Record<string, unknown>) => {
+              child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name, arguments: args } }) + "\n");
+              return (await next()).result;
+            };
+            // The synthetic host grants a different symbol. These refusals never open ADS.
+            const condition = { allOf: [{ name: "MAIN.denied", operator: "equals", value: true }] };
+            expect((await call("plc_debug_wait_until", { condition, timeoutMs: 120_000 })).structuredContent)
+              .toEqual({ status: "symbol_not_approved" });
+            expect((await call("plc_debug_wait_until", { condition, timeoutMs: 120_001 })).isError).toBe(true);
+            expect((await call("plc_debug_watch", { name: "MAIN.denied" })).structuredContent)
+              .toEqual({ status: "symbol_not_approved" });
+            expect((await call("plc_debug_list_watches", {})).structuredContent)
+              .toEqual({ status: "succeeded", source: "ads_live", watches: [], count: 0 });
+            expect((await call("plc_debug_unwatch", { name: approvedSymbol })).structuredContent)
+              .toMatchObject({ status: "succeeded", source: "ads_live", watch: { name: approvedSymbol, active: false } });
+          }
           expect(names).not.toContain("plc_write");
           expect(names).not.toContain("plc_read");
         } finally {
           clearTimeout(timer);
           child.stdin.end();
-          child.kill();
-          await terminated;
+          // Debug should also terminate cleanly on stdin EOF.
+          if (count !== 15) child.kill();
+          const shutdownTimer = setTimeout(() => child.kill(), 2_000);
+          const [exitCode] = await terminated;
+          clearTimeout(shutdownTimer);
+          if (count === 15) expect(exitCode).toBe(0);
         }
       }
     } finally { server.close(); }

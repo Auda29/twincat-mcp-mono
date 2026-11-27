@@ -43,6 +43,8 @@ import {
 } from "./diagnostics.js";
 
 export interface AdsServiceDependencies {
+  /** Disable automatic reconnection for clients whose access depends on a live grant. */
+  readonly autoReconnect?: boolean;
   readonly logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   readonly diagnostics?: RuntimeDiagnosticsDependencies;
 }
@@ -545,8 +547,15 @@ function compareNumbers(
   right: unknown,
   operator: Exclude<PlcWaitComparisonOperator, "equals" | "notEquals">,
 ): boolean {
-  const leftNumber = typeof left === "number" ? left : Number(left);
-  const rightNumber = typeof right === "number" ? right : Number(right);
+  let leftNumber: number;
+  let rightNumber: number;
+  try {
+    leftNumber = Number(left);
+    rightNumber = Number(right);
+  } catch {
+    // A structured PLC value can have fields that shadow JS coercion methods.
+    return false;
+  }
 
   if (!Number.isFinite(leftNumber) || !Number.isFinite(rightNumber)) {
     return false;
@@ -703,14 +712,14 @@ function completeRuntimeConfig(
 
 function toAdsClientSettings(
   config: ExtensionRuntimeConfig,
-  targetAdsPort = config.targetAdsPort,
-  options: { readonly rawClient?: boolean } = {},
+  targetAdsPort: number,
+  options: { readonly rawClient?: boolean; readonly autoReconnect: boolean },
 ): AdsClientSettings {
   if (config.connectionMode === "direct") {
     const settings: AdsClientSettings = {
       targetAmsNetId: config.targetAmsNetId,
       targetAdsPort,
-      autoReconnect: true,
+      autoReconnect: options.autoReconnect,
     };
 
     if (options.rawClient === true) {
@@ -739,7 +748,7 @@ function toAdsClientSettings(
   const settings: AdsClientSettings = {
     targetAmsNetId: config.targetAmsNetId,
     targetAdsPort,
-    autoReconnect: true,
+    autoReconnect: options.autoReconnect,
   };
 
   if (options.rawClient === true) {
@@ -751,17 +760,21 @@ function toAdsClientSettings(
 
 function createServiceClients(
   config: ExtensionRuntimeConfig,
+  autoReconnect: boolean,
 ): Map<TwinCatAdsServiceName, Client> {
   return new Map<TwinCatAdsServiceName, Client>([
     [
       "plc",
-      new Client(toAdsClientSettings(config, config.services.plc.targetAdsPort)),
+      new Client(
+        toAdsClientSettings(config, config.services.plc.targetAdsPort, { autoReconnect }),
+      ),
     ],
     [
       "nc",
       new Client(
         toAdsClientSettings(config, config.services.nc.targetAdsPort, {
           rawClient: true,
+          autoReconnect,
         }),
       ),
     ],
@@ -770,6 +783,7 @@ function createServiceClients(
       new Client(
         toAdsClientSettings(config, config.services.io.targetAdsPort, {
           rawClient: true,
+          autoReconnect,
         }),
       ),
     ],
@@ -1176,7 +1190,10 @@ export class AdsService {
       this.config.diagnostics,
       dependencies.diagnostics,
     );
-    this.#serviceClients = createServiceClients(this.config);
+    this.#serviceClients = createServiceClients(
+      this.config,
+      dependencies.autoReconnect ?? true,
+    );
     this.#client = this.#getExistingServiceClient("plc");
     this.#bindClientEvents();
   }
@@ -1958,6 +1975,7 @@ export class AdsService {
       let stableSince: number | undefined;
       let stableTimer: ReturnType<typeof setTimeout> | undefined;
       let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let pendingOperation = Promise.resolve();
 
       const timeoutTimer = setTimeout(() => {
         finish("timeout");
@@ -1968,28 +1986,14 @@ export class AdsService {
       };
 
       const cleanup = async (): Promise<void> => {
-        clearTimeout(timeoutTimer);
-
-        if (stableTimer !== undefined) {
-          clearTimeout(stableTimer);
-        }
-
-        if (pollTimer !== undefined) {
-          clearTimeout(pollTimer);
-        }
-
-        input.signal?.removeEventListener("abort", abortHandler);
-
-        const cleanupErrors: Error[] = [];
-        for (const subscription of subscriptions) {
-          try {
-            await this.#client.unsubscribe(subscription);
-          } catch (error) {
-            cleanupErrors.push(
-              error instanceof Error ? error : new Error(String(error)),
-            );
-          }
-        }
+        const results = await Promise.allSettled(
+          subscriptions.splice(0).map(async subscription => this.#client.unsubscribe(subscription)),
+        );
+        const cleanupErrors = results.flatMap(result => {
+          if (result.status === "fulfilled") return [];
+          const error: unknown = result.reason;
+          return [error instanceof Error ? error : new Error(String(error))];
+        });
 
         if (cleanupErrors.length > 0) {
           this.#lastError = new AggregateError(
@@ -2004,15 +2008,30 @@ export class AdsService {
           .map((name) => values.get(name))
           .filter((value): value is PlcWaitValueSnapshot => value !== undefined);
 
+      const settle = (complete: () => void): void => {
+        settled = true;
+        clearTimeout(timeoutTimer);
+        clearTimeout(stableTimer);
+        clearTimeout(pollTimer);
+        input.signal?.removeEventListener("abort", abortHandler);
+        // Subscription setup or a fallback read can still be in flight. Close
+        // every subscription before the caller can disconnect the ADS client.
+        void pendingOperation.then(cleanup).then(complete, reject);
+      };
+
+      const runOperation = (operation: () => Promise<void>): void => {
+        pendingOperation = Promise.resolve().then(operation).catch(error => {
+          if (!settled) settle(() => reject(error));
+        });
+      };
+
       const finish = (status: PlcWaitUntilStatus): void => {
         if (settled) {
           return;
         }
 
-        settled = true;
         const completedAtTime = Date.now();
-        void cleanup();
-        resolve({
+        const result: PlcWaitUntilResult = {
           status,
           conditionMatched: evaluateCondition(input.condition, values),
           startedAt,
@@ -2021,7 +2040,8 @@ export class AdsService {
           timeoutMs: input.timeoutMs,
           stableForMs,
           values: snapshotValues(),
-        });
+        };
+        settle(() => resolve(result));
       };
 
       const evaluate = (): void => {
@@ -2062,6 +2082,7 @@ export class AdsService {
       };
 
       const updateValue = (name: string, value: unknown, timestamp: Date): void => {
+        if (settled) return;
         values.set(name, {
           name,
           value,
@@ -2071,24 +2092,14 @@ export class AdsService {
       };
 
       const poll = async (): Promise<void> => {
-        try {
-          const results = await this.readMany(symbolNames);
-          for (const result of results) {
-            updateValue(result.name, result.value, new Date(result.timestamp));
-          }
-        } catch (error) {
-          if (!settled) {
-            settled = true;
-            void cleanup();
-            reject(error);
-          }
-          return;
+        if (settled) return;
+        const results = await this.readMany(symbolNames);
+        for (const result of results) {
+          updateValue(result.name, result.value, new Date(result.timestamp));
         }
 
         if (!settled) {
-          pollTimer = setTimeout(() => {
-            void poll();
-          }, cycleTimeMs);
+          pollTimer = setTimeout(() => runOperation(poll), cycleTimeMs);
         }
       };
 
@@ -2114,12 +2125,8 @@ export class AdsService {
               input.maxDelayMs,
             );
 
-            if (settled) {
-              await this.#client.unsubscribe(subscription);
-              break;
-            }
-
             subscriptions.push(subscription);
+            if (settled) break;
             if (subscription.latestData) {
               updateValue(
                 name,
@@ -2143,25 +2150,13 @@ export class AdsService {
             }
           }
         } catch {
-          for (const subscription of subscriptions.splice(0)) {
-            try {
-              await this.#client.unsubscribe(subscription);
-            } catch {
-              // Best effort cleanup before falling back to polling.
-            }
-          }
-
-          await poll();
+          if (settled) return;
+          await cleanup();
+          if (!settled) await poll();
         }
       };
 
-      void subscribe().catch((error) => {
-        if (!settled) {
-          settled = true;
-          void cleanup();
-          reject(error);
-        }
-      });
+      runOperation(subscribe);
     });
   }
 

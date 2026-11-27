@@ -1291,5 +1291,108 @@ describe("AdsService", () => {
 
     expect(result.status).toBe("timeout");
     expect(result.conditionMatched).toBe(false);
+    expect(mockState.unsubscribeCalls).toBe(1);
+    await service.disconnect();
+  });
+
+  it("times out when a structured PLC value cannot be converted for numeric comparison", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const structuredValue = { valueOf: 1, toString: 2 };
+    mockState.values["MAIN.value"] = structuredValue;
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 8,
+    });
+
+    expect(await service.waitUntil({
+      condition: { name: "MAIN.value", operator: "greaterThan", value: 0 },
+      timeoutMs: 10,
+    })).toMatchObject({ status: "timeout", conditionMatched: false, values: [{ value: structuredValue }] });
+    expect(mockState.unsubscribeCalls).toBe(1);
+    await service.disconnect();
+  });
+
+  it("waits for an in-flight subscription and its unsubscribe before returning an abort", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 8,
+    }, { autoReconnect: false });
+    const client = getMockClientByPort(851)!;
+    expect(client.settings.autoReconnect).toBe(false);
+    const controller = new AbortController();
+    let releaseSubscribe!: () => void;
+    let releaseUnsubscribe!: () => void;
+    const subscribing = new Promise<void>(resolve => { releaseSubscribe = resolve; });
+    const unsubscribing = new Promise<void>(resolve => { releaseUnsubscribe = resolve; });
+    const subscribe = client.subscribeValue.bind(client);
+    const unsubscribe = client.unsubscribe.bind(client);
+    const subscribeSpy = vi.spyOn(client, "subscribeValue").mockImplementation(async (...args) => {
+      await subscribing;
+      return subscribe(...args);
+    });
+    const unsubscribeSpy = vi.spyOn(client, "unsubscribe").mockImplementation(async subscription => {
+      await unsubscribing;
+      expect(client.connection.connected).toBe(true);
+      await unsubscribe(subscription);
+    });
+    let completed = false;
+    const pending = service.waitUntil({
+      condition: { name: "MAIN.watch", operator: "equals", value: true },
+      timeoutMs: 1_000, signal: controller.signal,
+    }).then(async result => {
+      completed = true;
+      await service.disconnect();
+      return result;
+    });
+    try {
+      await vi.waitFor(() => expect(subscribeSpy).toHaveBeenCalledOnce());
+      controller.abort();
+      releaseSubscribe();
+      await vi.waitFor(() => expect(unsubscribeSpy).toHaveBeenCalledOnce());
+      expect(completed).toBe(false);
+      releaseUnsubscribe();
+      expect(await pending).toMatchObject({ status: "cancelled", conditionMatched: false, values: [] });
+      expect(client.connection.connected).toBe(false);
+      expect(Object.values(client.activeSubscriptions["192.168.1.120.1.1:851"] ?? {})).toHaveLength(0);
+    } finally {
+      releaseSubscribe();
+      releaseUnsubscribe();
+      await pending;
+    }
+  });
+
+  it("requires a continuous stable match across nested wait conditions", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    vi.useFakeTimers();
+    try {
+      const service = new AdsService({
+        connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+        writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 8,
+      });
+      let completed = false;
+      const wait = service.waitUntil({
+        condition: { allOf: [
+          { name: "MAIN.value", operator: "greaterThan", value: 30 },
+          { anyOf: [{ name: "MAIN.watch", operator: "equals", value: true }] },
+        ] },
+        timeoutMs: 500, stableForMs: 100,
+      }).then(result => { completed = true; return result; });
+      await vi.advanceTimersByTimeAsync(60);
+      const client = getMockClientByPort(851)!;
+      const subscription = Object.values(client.activeSubscriptions["192.168.1.120.1.1:851"]!)
+        .find(entry => entry.settings.target === "MAIN.watch");
+      subscription.settings.callback({ timestamp: new Date(), value: false }, subscription);
+      await vi.advanceTimersByTimeAsync(30);
+      subscription.settings.callback({ timestamp: new Date(), value: true }, subscription);
+      await vi.advanceTimersByTimeAsync(99);
+      expect(completed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await wait).toMatchObject({ status: "fulfilled", conditionMatched: true, stableForMs: 100, durationMs: 190 });
+      expect(mockState.unsubscribeCalls).toBe(2);
+      await service.disconnect();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

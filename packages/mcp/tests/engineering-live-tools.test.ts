@@ -163,13 +163,17 @@ describe("explicit live engineering tools", () => {
   it.each([
     [false, "c0b0214a180d42bb8fb5359aec0f87d5a4326c472a2deadca8b5096ec274987a"],
     [true, "96a3e71a5e95707e8c20b993865ba67904ae8f38475ccf152185bd96d83e2fe6"],
-  ] as const)("retains the exact 0.5.8 non-Editor catalog bytes (debug=%s)", (enableDebugTools, baseline) => {
+  ] as const)("retains the exact 0.5.8 non-Editor catalog prefix bytes (debug=%s)", (enableDebugTools, baseline) => {
     const definitions = createLiveEngineeringToolDefinitions({ context, dispatch: async () => "" }, { enableDebugTools });
     const tools = definitions.map(({ name, title, description, inputSchema, annotations }) => {
       const { $schema, ...schema } = zodToJsonSchema(inputSchema, { $refStrategy: "none", target: "jsonSchema7" });
       return { name, title, description, inputSchema: schema, annotations };
     });
-    expect(createHash("sha256").update(JSON.stringify({ schemaVersion: 1, tools }, null, 2) + "\n").digest("hex")).toBe(baseline);
+    const originalTools = tools.slice(0, enableDebugTools ? 11 : 9);
+    expect(createHash("sha256").update(JSON.stringify({ schemaVersion: 1, tools: originalTools }, null, 2) + "\n").digest("hex")).toBe(baseline);
+    expect(tools.slice(originalTools.length).map(tool => tool.name)).toEqual(enableDebugTools ? [
+      "plc_debug_wait_until", "plc_debug_watch", "plc_debug_unwatch", "plc_debug_list_watches",
+    ] : []);
     expect(tools.map((tool) => tool.name)).not.toContain("plc_source_create");
   });
 

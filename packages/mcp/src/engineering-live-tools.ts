@@ -103,7 +103,11 @@ const responseSchema = z.object({
 /** Explicit live mode. The default file backend and its tools remain unchanged. */
 export function createLiveEngineeringToolDefinitions(
   binding: LiveEngineeringToolBinding,
-  options: { readonly enableDevelopmentSourceTools?: boolean; readonly enableDebugTools?: boolean } = {},
+  options: {
+    readonly enableDevelopmentSourceTools?: boolean;
+    readonly enableDebugTools?: boolean;
+    readonly debugShutdown?: AbortSignal | undefined;
+  } = {},
 ): McpToolDefinition[] {
   if (options.enableDevelopmentSourceTools && options.enableDebugTools) throw new Error("Conflicting host profile");
   const context = Object.freeze(contextSchema.parse(binding.context));
@@ -118,7 +122,9 @@ export function createLiveEngineeringToolDefinitions(
     const request = JSON.stringify({ protocolVersion: 1, sessionId, operationId, operation, expected, arguments: args });
     try {
       // Exactly one dispatch. In particular, an unknown submission is not retried.
-      const text = await dispatch(request, approval ? 125_000 : 30_000);
+      // Context checks also run during a wait and should fail closed promptly.
+      const timeoutMs = operation === "debug.context" ? 3_000 : approval ? 125_000 : 30_000;
+      const text = await dispatch(request, timeoutMs);
       if (Buffer.byteLength(text, "utf8") > (operation.startsWith("source.") ? 1024 : 512) * 1024) throw new Error("Oversized response");
       const response = responseSchema.parse(JSON.parse(text));
       if (response.sessionId !== sessionId || response.operationId !== operationId) throw new Error("Response binding mismatch");
@@ -204,6 +210,6 @@ export function createLiveEngineeringToolDefinitions(
   // child can publish source definitions. The host still authorizes operations
   // and validates the source adapter and native approval before a mutation.
   const buildTools = tools.filter((tool) => !tool.name.startsWith("plc_source_"));
-  if (options.enableDebugTools) return [...buildTools, ...createDebugLiveTools(invoke)];
+  if (options.enableDebugTools) return [...buildTools, ...createDebugLiveTools(invoke, undefined, options.debugShutdown)];
   return options.enableDevelopmentSourceTools === true ? tools : buildTools;
 }
