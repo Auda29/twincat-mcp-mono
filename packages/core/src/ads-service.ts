@@ -1933,7 +1933,14 @@ export class AdsService {
   ): Promise<PlcWatchRegistration> {
     const generation = this.#disconnectGeneration;
 
-    const existing = this.#watchCache.get(name);
+    let existing = this.#watchCache.get(name);
+    if (existing && !this.#client.connection.connected) {
+      await this.connect();
+      if (generation !== this.#disconnectGeneration) {
+        throw new Error("PLC watch registration was closed.");
+      }
+      existing = this.#watchCache.get(name);
+    }
     if (existing) {
       return this.#toWatchRegistration(name, existing);
     }
@@ -1961,6 +1968,7 @@ export class AdsService {
       generation === this.#disconnectGeneration && this.#watchRegistrations.get(name) === registration;
     const registration: Promise<PlcWatchRegistration> = Promise.resolve()
       .then(async () => {
+        if (!isCurrent()) throw new Error("PLC watch registration was closed.");
         await this.connect();
         if (!isCurrent()) throw new Error("PLC watch registration was closed.");
 

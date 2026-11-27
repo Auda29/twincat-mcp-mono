@@ -603,6 +603,76 @@ describe("AdsService", () => {
     await service.disconnect();
   });
 
+  it("does not connect when a watch is immediately followed by disconnect", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+    });
+    const client = getMockClientByPort(851)!;
+    const connect = vi.spyOn(client, "connect");
+
+    const registration = service.watchValue("MAIN.watch");
+    const closing = service.disconnect();
+
+    await expect(registration).rejects.toThrow("PLC watch registration was closed.");
+    await closing;
+    expect(connect).not.toHaveBeenCalled();
+    expect(client.connection.connected).toBe(false);
+  });
+
+  it("propagates a reconnect failure when watching a cached symbol offline", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+    });
+    await service.watchValue("MAIN.watch");
+    const client = getMockClientByPort(851)!;
+    client.connection.connected = false;
+    client.emit("connectionLost");
+    mockState.failConnectPorts.add(851);
+
+    await expect(service.watchValue("MAIN.watch")).rejects.toThrow("Port 851 unavailable");
+    expect(mockState.connectCalls).toBe(2);
+    expect(mockState.subscribeCalls).toBe(1);
+    await service.disconnect();
+  });
+
+  it("registers a fresh watch when the cached watch is removed during reconnect", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+    });
+    const firstWatch = await service.watchValue("MAIN.watch");
+    const client = getMockClientByPort(851)!;
+    client.connection.connected = false;
+    client.emit("connectionLost");
+    const connect = client.connect.bind(client);
+    let resume!: () => void;
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    const connectSpy = vi.spyOn(client, "connect").mockImplementationOnce(async () => {
+      await gate;
+      return connect();
+    });
+
+    const registration = service.watchValue("MAIN.watch");
+    expect(await service.unwatchValue("MAIN.watch")).toMatchObject({
+      active: false,
+      notificationHandle: firstWatch.notificationHandle,
+    });
+    resume();
+
+    const watch = await registration;
+    expect(watch.active).toBe(true);
+    expect(watch.notificationHandle).not.toBe(firstWatch.notificationHandle);
+    expect(service.listWatches()).toMatchObject([{ name: "MAIN.watch", notificationHandle: watch.notificationHandle }]);
+    expect(connectSpy).toHaveBeenCalledOnce();
+    expect(mockState.subscribeCalls).toBe(2);
+    await service.disconnect();
+  });
+
   it("cancels a watch registration while the ADS connection is pending", async () => {
     const { AdsService } = await import("../src/ads-service.js");
     const service = new AdsService({
