@@ -390,6 +390,15 @@ state is unknown. With no confirmed changes, a missing dirty callback or an
 unknown state for any of these files yields `unknown_dirty_state`. Both
 reasons refuse the build.
 
+Build preflight accepts a project with no `<Import>` elements, as used by the
+TwinCAT 3.1.4024.78 PLC templates, or one unconditional import of
+`$(MSBuildExtensionsPath)\Beckhoff\TwinCAT\v3.1\TcPlcProject.targets`.
+It verifies the dependency owner's `Project.UniqueName` against the selected
+solution context. If that getter returns COM `E_FAIL` (`0x80004005`), preflight
+requires the context path to resolve to the bound `.plcproj` and
+`BuildDependency.Project.FullName` to match that same path. Either identity
+check still requires an empty `RequiredProjects` array.
+
 `project.association` takes empty `arguments` and observes the injected DTE
 solution. It reports `solutionFile`, `plcProjectFile`, `twinCatProjectFile`
 (only for a unique match), `associationCount`, `owningTwinCatPlcChildCount`,

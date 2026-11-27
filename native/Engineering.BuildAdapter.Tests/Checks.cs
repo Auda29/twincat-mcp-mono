@@ -5,6 +5,7 @@ using System.Linq;
 using System.Security;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Web.Script.Serialization;
 using EnvDTE;
@@ -32,7 +33,14 @@ sealed class DocumentFixture : Document { public bool Saved {get;set;} public st
 sealed class ProjectFixture : Project
 {
     public string FileName {get;set;} public string Kind {get;set;} public object Object {get;set;}
-    public object ProjectItems {get { return null; }} public bool Saved {get;set;} public string UniqueName {get;set;}
+    public object ProjectItems {get { return null; }} public bool Saved {get;set;}
+    internal Exception UniqueNameError;
+    private string uniqueName;
+    public string UniqueName {
+        get { if (UniqueNameError != null) throw UniqueNameError; return uniqueName; }
+        set { uniqueName = value; }
+    }
+    public string FullName {get;set;}
 }
 sealed class ContextFixture : SolutionContext { public string ProjectName {get;set;} public bool ShouldBuild {get;set;} public string ConfigurationName {get;set;} public string PlatformName {get;set;} }
 sealed class Configuration : EnvDTE80.SolutionConfiguration2 { public string Name {get;set;} public string PlatformName {get;set;} public object SolutionContexts {get;set;} }
@@ -75,6 +83,36 @@ static class Checks
     }
     static void Require(bool value, string name) { if (!value) throw new Exception(name); }
     static void Refused(Action a, string code) { try { a(); } catch (NativeBuildException e) { Require(e.Code == code, "expected " + code + " got " + e.Code); return; } throw new Exception("missing refusal " + code); }
+    static void CheckDependencyIdentity(BuildDteAdapter adapter, string sln, string plc, ContextFixture context,
+        ProjectFixture dependencyOwner, Dependency dependency)
+    {
+        dependencyOwner.FullName = plc;
+        dependencyOwner.UniqueName = "Other.plcproj";
+        Refused(() => adapter.Prepare(sln, plc, _ => false), "dependency_identity_mismatch");
+
+        context.ProjectName = Path.GetFileName(plc);
+        dependencyOwner.UniqueNameError = new COMException("Fixture UniqueName E_FAIL", unchecked((int)0x80004005));
+        var target = adapter.Prepare(sln, plc, _ => false);
+        Require(target.UniqueName == context.ProjectName && target.ProjectFile == plc, "reflected E_FAIL falls back to the exact PLC path");
+
+        dependencyOwner.FullName = Path.Combine(Path.GetDirectoryName(plc), "Other", Path.GetFileName(plc));
+        Refused(() => adapter.Prepare(sln, plc, _ => false), "dependency_identity_mismatch");
+        dependencyOwner.FullName = plc;
+
+        dependency.RequiredProjects = new object[] { new object() };
+        Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependencies_not_supported");
+        dependency.RequiredProjects = new object[0];
+
+        dependencyOwner.UniqueNameError = new COMException("Fixture UniqueName E_ACCESSDENIED", unchecked((int)0x80070005));
+        Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependency_evidence_unavailable");
+        dependencyOwner.UniqueNameError = new InvalidOperationException("Fixture UniqueName failure");
+        Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependency_evidence_unavailable");
+
+        context.ProjectName = plc;
+        dependencyOwner.UniqueName = plc;
+        dependencyOwner.UniqueNameError = null;
+    }
+
     static void Main()
     {
         string dir = Path.Combine(Path.GetTempPath(), "build-adapter-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
@@ -112,6 +150,7 @@ static class Checks
                 context.PlatformName = "TwinCAT RT (x86)"; Refused(() => adapter.Prepare(sln, plc, _ => false), "build_configuration_mismatch"); context.PlatformName = "TwinCAT RT (x64)";
                 dependency.RequiredProjects = new object[] { new object() }; Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependencies_not_supported");
                 dependency.RequiredProjects = null; Refused(() => adapter.Prepare(sln, plc, _ => false), "build_dependencies_not_supported"); dependency.RequiredProjects = new object[0];
+                CheckDependencyIdentity(adapter, sln, plc, context, dependencyOwner, dependency);
                 Refused(() => adapter.Prepare(sln, plc, null), "unknown_dirty_state");
                 foreach (var path in new[] { plc, sln, tsproj })
                 {
