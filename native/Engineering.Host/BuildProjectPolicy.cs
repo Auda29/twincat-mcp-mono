@@ -18,7 +18,7 @@ namespace TwinCatMcp.Engineering.Host
                 xml = XDocument.Load(reader);
             if (xml.Root == null || xml.Root.Name.LocalName != "Project" || xml.Root.Attribute("Sdk") != null || xml.Root.Attribute("InitialTargets") != null ||
                 (xml.Root.Attribute("DefaultTargets") != null && (string)xml.Root.Attribute("DefaultTargets") != "Build")) Refuse();
-            if (xml.Descendants().Count(n => n.Name.LocalName == "Import") > 1) Refuse();
+            if (xml.Descendants().Count(n => string.Equals(n.Name.LocalName, "Import", StringComparison.OrdinalIgnoreCase)) > 1) Refuse();
             foreach (var node in xml.Descendants())
             {
                 // Property functions can execute code without an explicit target.

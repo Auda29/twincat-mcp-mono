@@ -161,6 +161,9 @@ internal static class BuildChecks
             BuildProjectPolicy.Validate(file); checks++;
             File.WriteAllText(file, project + import + import + "</Project>");
             Throws(() => BuildProjectPolicy.Validate(file), "refused", "duplicate import refused", unsafeProject);
+            var lowercaseImport = import.Replace("<Import ", "<import ");
+            File.WriteAllText(file, project + lowercaseImport + lowercaseImport + "</Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "duplicate lowercase import refused", unsafeProject);
             File.WriteAllText(file, project + "<Import Project=\"foreign.targets\" /></Project>");
             Throws(() => BuildProjectPolicy.Validate(file), "refused", "foreign import refused", unsafeProject);
             File.WriteAllText(file, project + import.Replace(" />", " Condition=\"true\" />") + "</Project>");
