@@ -119,6 +119,24 @@ static class Checks
                     Refused(() => adapter.Prepare(sln, plc, file => file == path ? (bool?)null : false), "unknown_dirty_state");
                 }
                 Refused(() => adapter.Prepare(sln, plc, file => file == plc ? (bool?)null : file == tsproj), "unsaved_project_changes");
+                Refused(() => adapter.Prepare(sln, plc, file =>
+                {
+                    if (file == plc) throw new InvalidOperationException("fixture dirty-state callback failure");
+                    return file == tsproj;
+                }), "unsaved_project_changes");
+                bool laterCallbackCalled = false;
+                Refused(() => adapter.Prepare(sln, plc, file =>
+                {
+                    if (file == plc) return true;
+                    laterCallbackCalled = true;
+                    throw new InvalidOperationException("fixture dirty-state callback failure");
+                }), "unsaved_project_changes");
+                Require(!laterCallbackCalled, "confirmed dirty state stops later callbacks");
+                Refused(() => adapter.Prepare(sln, plc, file =>
+                {
+                    if (file == sln) throw new InvalidOperationException("fixture dirty-state callback failure");
+                    return false;
+                }), "unknown_dirty_state");
                 document.Saved = false; Refused(() => adapter.Prepare(sln, plc, _ => false), "dirty_or_unknown_document"); document.Saved = true;
                 Refused(() => adapter.Prepare(sln, plc, path => path == document.FullName ? (bool?)null : false), "dirty_or_unknown_document");
                 Require(build.Calls == 1, "rejected cases do not submit build");
