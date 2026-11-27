@@ -1600,16 +1600,31 @@ export async function main(): Promise<void> {
     try { binding = await bootstrapEngineeringHost(process.stdin); }
     catch { throw new Error("Engineering host bootstrap failed"); }
   }
+  const debugShutdown = debugHost ? new AbortController() : undefined;
   const liveTools = binding === undefined ? [] : createLiveEngineeringToolDefinitions({
     context: { sessionId: binding.sessionId, ...binding.expected },
     dispatch: (request, timeoutMs) => binding!.client.dispatch(request, timeoutMs),
-  }, { enableDevelopmentSourceTools: editorHost, enableDebugTools: debugHost });
-  // Debug opens a read-only ADS connection on demand, after the host confirms
-  // the target and grant. The other owned children never open an ADS connection.
+  }, { enableDevelopmentSourceTools: editorHost, enableDebugTools: debugHost, debugShutdown: debugShutdown?.signal });
   const server = binding === undefined
     ? createMcpServer(createRuntimeFromConfig(await loadConfigInput()))
     : createMcpServerFromTools(liveTools);
   if (binding !== undefined) process.stdout.write(JSON.stringify({ kind: "twincat-assistant-engineering-ready", protocolVersion: 1, sessionId: binding.sessionId }) + "\n");
+  if (debugShutdown && binding) {
+    const host = binding.client;
+    const close = () => {
+      if (debugShutdown.signal.aborted) return;
+      debugShutdown.abort();
+      host.dispose();
+      process.stdin.off("end", close);
+      process.off("SIGINT", close);
+      process.off("SIGTERM", close);
+      void server.close().catch(() => { process.exitCode = 1; });
+    };
+    server.onclose = close;
+    process.stdin.once("end", close);
+    process.once("SIGINT", close);
+    process.once("SIGTERM", close);
+  }
   await server.connect(new StdioServerTransport());
 }
 

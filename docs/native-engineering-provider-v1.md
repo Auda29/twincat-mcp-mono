@@ -33,10 +33,17 @@ request, target path and kind, expiry, and canonical creation JSON with
 normalized initial text and effective defaults.
 
 The Debug child mode `--host-debug-bootstrap-stdin` exposes the
-nine build/session/diagnostic tools plus `plc_debug_state` and
-`plc_debug_read`. It omits all source mutation tools. A Debug tool makes the
-internal `debug.context` request on the authenticated host channel with empty
-arguments, using the same correlated session, operation and context envelope.
+nine build/session/diagnostic tools plus six read-only PLC tools.
+
+- `plc_debug_state`
+- `plc_debug_read`
+- `plc_debug_wait_until`
+- `plc_debug_watch`
+- `plc_debug_unwatch`
+- `plc_debug_list_watches`
+
+A Debug tool sends `debug.context` with empty arguments on the authenticated
+host channel, using the same correlated session, operation and context envelope.
 Only the native host can issue a grant for the selected active project chat.
 The native host owns Debug access policy, including automatic read-only access
 when enabled in its settings. The child never issues a grant or supplies a
@@ -65,6 +72,19 @@ The child checks the grant before opening ADS, before each approved symbol
 read and again before returning the samples. Each read uses the local ADS
 router, disables writes and closes its connection. Responses return at most
 eight timestamped scalar samples and discard readings if the grant changes.
+A wait evaluates a bounded tree of scalar comparisons across up to eight
+approved symbols for at most 120 seconds. The child checks the grant during
+the wait and before returning its timestamped samples. A changed or revoked
+grant cancels the wait and discards the samples.
+
+The child maintains up to eight watches on a separate read-only ADS connection
+bound to the exact Debug grant. The list operation returns each watch's latest
+available timestamped scalar observation. Any Debug tool call and periodic
+checks during an active watch can detect a changed or revoked grant and close
+the watch connection. The child does not automatically reconnect that ADS
+connection. Removing the last watch or closing the Debug child also
+releases that connection.
+
 The host-side runtime observation and consent flow must be implemented before
 this catalog can be adopted.
 
@@ -363,6 +383,12 @@ reports `capabilities.plcBuild: "supported"` with `result.configuration`,
 `result.platform`, `buildScope: "plcProject"` and `targetProjectFile` equal to
 the bound PLC project. The submitted strings must match before and after native
 approval. A supported preflight is not evidence that a real build completed.
+The project file dirty check reports `unsaved_project_changes` in
+`session.describe.result.buildUnavailableReason` when the host confirms unsaved
+changes in the `.plcproj`, `.sln` or owning `.tsproj`, even if another file's
+state is unknown. With no confirmed changes, a missing dirty callback or an
+unknown state for any of these files yields `unknown_dirty_state`. Both
+reasons refuse the build.
 
 `project.association` takes empty `arguments` and observes the injected DTE
 solution. It reports `solutionFile`, `plcProjectFile`, `twinCatProjectFile`

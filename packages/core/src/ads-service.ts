@@ -14,7 +14,6 @@ import {
   type ReadRawMultiResult,
   type ReadValueResult,
   type SubscriptionCallback,
-  type SubscriptionData,
   type VariableHandle,
   type WriteValueResult,
 } from "ads-client";
@@ -43,6 +42,10 @@ import {
 } from "./diagnostics.js";
 
 export interface AdsServiceDependencies {
+  /** Disable automatic reconnection for clients whose access depends on a live grant. */
+  readonly autoReconnect?: boolean;
+  /** Maximum time to drain a PLC wait before returning its result. Defaults to 2 seconds. */
+  readonly waitCleanupTimeoutMs?: number;
   readonly logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   readonly diagnostics?: RuntimeDiagnosticsDependencies;
 }
@@ -545,8 +548,15 @@ function compareNumbers(
   right: unknown,
   operator: Exclude<PlcWaitComparisonOperator, "equals" | "notEquals">,
 ): boolean {
-  const leftNumber = typeof left === "number" ? left : Number(left);
-  const rightNumber = typeof right === "number" ? right : Number(right);
+  let leftNumber: number;
+  let rightNumber: number;
+  try {
+    leftNumber = Number(left);
+    rightNumber = Number(right);
+  } catch {
+    // A structured PLC value can have fields that shadow JS coercion methods.
+    return false;
+  }
 
   if (!Number.isFinite(leftNumber) || !Number.isFinite(rightNumber)) {
     return false;
@@ -703,14 +713,14 @@ function completeRuntimeConfig(
 
 function toAdsClientSettings(
   config: ExtensionRuntimeConfig,
-  targetAdsPort = config.targetAdsPort,
-  options: { readonly rawClient?: boolean } = {},
+  targetAdsPort: number,
+  options: { readonly rawClient?: boolean; readonly autoReconnect: boolean },
 ): AdsClientSettings {
   if (config.connectionMode === "direct") {
     const settings: AdsClientSettings = {
       targetAmsNetId: config.targetAmsNetId,
       targetAdsPort,
-      autoReconnect: true,
+      autoReconnect: options.autoReconnect,
     };
 
     if (options.rawClient === true) {
@@ -739,7 +749,7 @@ function toAdsClientSettings(
   const settings: AdsClientSettings = {
     targetAmsNetId: config.targetAmsNetId,
     targetAdsPort,
-    autoReconnect: true,
+    autoReconnect: options.autoReconnect,
   };
 
   if (options.rawClient === true) {
@@ -751,17 +761,21 @@ function toAdsClientSettings(
 
 function createServiceClients(
   config: ExtensionRuntimeConfig,
+  autoReconnect: boolean,
 ): Map<TwinCatAdsServiceName, Client> {
   return new Map<TwinCatAdsServiceName, Client>([
     [
       "plc",
-      new Client(toAdsClientSettings(config, config.services.plc.targetAdsPort)),
+      new Client(
+        toAdsClientSettings(config, config.services.plc.targetAdsPort, { autoReconnect }),
+      ),
     ],
     [
       "nc",
       new Client(
         toAdsClientSettings(config, config.services.nc.targetAdsPort, {
           rawClient: true,
+          autoReconnect,
         }),
       ),
     ],
@@ -770,6 +784,7 @@ function createServiceClients(
       new Client(
         toAdsClientSettings(config, config.services.io.targetAdsPort, {
           rawClient: true,
+          autoReconnect,
         }),
       ),
     ],
@@ -1158,12 +1173,14 @@ export class AdsService {
   readonly #symbolLookupCache = new Map<string, AdsSymbol>();
   readonly #handleCache = new Map<string, VariableHandle>();
   readonly #watchCache = new Map<string, PlcWatchEntry>();
+  readonly #watchRegistrations = new Map<string, Promise<PlcWatchRegistration>>();
 
   #state: AdsConnectionState = "disconnected";
   #lastError: Error | undefined;
   #connectPromise: Promise<AdsClientConnection> | undefined;
   #symbolsLoaded = false;
   #writeMode: PlcWriteMode = "read-only";
+  #disconnectGeneration = 0;
   private readonly config: ExtensionRuntimeConfig;
   private readonly runtimeDiagnostics: RuntimeDiagnostics;
 
@@ -1176,7 +1193,10 @@ export class AdsService {
       this.config.diagnostics,
       dependencies.diagnostics,
     );
-    this.#serviceClients = createServiceClients(this.config);
+    this.#serviceClients = createServiceClients(
+      this.config,
+      dependencies.autoReconnect ?? true,
+    );
     this.#client = this.#getExistingServiceClient("plc");
     this.#bindClientEvents();
   }
@@ -1245,30 +1265,47 @@ export class AdsService {
   }
 
   async connect(): Promise<AdsClientConnection> {
-    if (this.#client.connection.connected) {
-      return this.#client.connection;
-    }
-
     if (this.#connectPromise) {
       return this.#connectPromise;
     }
 
+    if (this.#client.connection.connected) {
+      return this.#client.connection;
+    }
+
+    const generation = this.#disconnectGeneration;
+    const assertCurrent = () => {
+      if (generation !== this.#disconnectGeneration) {
+        throw new Error("ADS connection was closed.");
+      }
+    };
     this.#state = "connecting";
     this.#connectPromise = (async () => {
       try {
-        const connection = await this.#client.connect();
+        const connection = await this.#client.connect().finally(async () => {
+          // The transport can become connected after disconnect saw it as offline.
+          if (generation !== this.#disconnectGeneration && this.#client.connection.connected) {
+            await this.#client.disconnect();
+          }
+        });
+        assertCurrent();
 
         await this.#client.cacheSymbols();
+        assertCurrent();
         await this.#client.cacheDataTypes();
+        assertCurrent();
         await this.#loadSymbolCache();
+        assertCurrent();
 
         this.#state = "connected";
         this.#lastError = undefined;
         return connection;
       } catch (error) {
-        this.#state = "degraded";
-        this.#lastError =
-          error instanceof Error ? error : new Error(String(error));
+        if (generation === this.#disconnectGeneration) {
+          this.#state = "degraded";
+          this.#lastError =
+            error instanceof Error ? error : new Error(String(error));
+        }
         throw error;
       } finally {
         this.#connectPromise = undefined;
@@ -1279,37 +1316,47 @@ export class AdsService {
   }
 
   async disconnect(): Promise<void> {
+    this.#disconnectGeneration++;
+    this.#watchRegistrations.clear();
     const watchEntries = [...this.#watchCache.values()];
+    const handles = [...this.#handleCache.values()];
     const cleanupErrors: Error[] = [];
-
-    for (const watch of watchEntries) {
+    let cleanupTimedOut = false;
+    if (watchEntries.length > 0 || handles.length > 0) {
+      const runCleanup = async (operation: () => Promise<unknown>) => {
+        try {
+          await operation();
+        } catch (error) {
+          cleanupErrors.push(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>(resolve => {
+        timer = setTimeout(() => {
+          cleanupTimedOut = true;
+          resolve();
+        }, this.dependencies.waitCleanupTimeoutMs ?? 2_000).unref();
+      });
+      const cleanup = Promise.allSettled([
+        ...watchEntries.map(watch => runCleanup(() => this.#client.unsubscribe(watch.subscription))),
+        ...handles.map(handle => runCleanup(() => this.#client.deleteVariableHandle(handle))),
+      ]);
       try {
-        await this.#client.unsubscribe(watch.subscription);
-      } catch (error) {
-        cleanupErrors.push(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      }
-    }
-
-    for (const handle of this.#handleCache.values()) {
-      try {
-        await this.#client.deleteVariableHandle(handle);
-      } catch (error) {
-        cleanupErrors.push(
-          error instanceof Error ? error : new Error(String(error)),
-        );
+        await Promise.race([cleanup, deadline]);
+      } finally {
+        clearTimeout(timer);
       }
     }
 
     this.#watchCache.clear();
-    this.#handleCache.clear();
-    this.#symbolCache.clear();
-    this.#symbolsLoaded = false;
+    this.#invalidateRuntimeCaches();
 
-    if (this.#client.connection.connected) {
+    if (cleanupTimedOut || this.#client.connection.connected) {
       try {
-        await this.#client.disconnect();
+        // A graceful ADS disconnect retries any subscriptions still active.
+        await this.#client.disconnect(cleanupTimedOut);
       } catch (error) {
         cleanupErrors.push(
           error instanceof Error ? error : new Error(String(error)),
@@ -1884,14 +1931,24 @@ export class AdsService {
       readonly maxDelayMs?: number;
     },
   ): Promise<PlcWatchRegistration> {
-    await this.connect();
+    const generation = this.#disconnectGeneration;
 
-    const existing = this.#watchCache.get(name);
+    let existing = this.#watchCache.get(name);
+    if (existing && !this.#client.connection.connected) {
+      await this.connect();
+      if (generation !== this.#disconnectGeneration) {
+        throw new Error("PLC watch registration was closed.");
+      }
+      existing = this.#watchCache.get(name);
+    }
     if (existing) {
       return this.#toWatchRegistration(name, existing);
     }
 
-    if (this.#watchCache.size >= this.config.maxNotifications) {
+    const pending = this.#watchRegistrations.get(name);
+    if (pending) return pending;
+
+    if (this.#watchCache.size + this.#watchRegistrations.size >= this.config.maxNotifications) {
       throw new Error(
         `Notification limit reached (${this.config.maxNotifications}).`,
       );
@@ -1901,28 +1958,34 @@ export class AdsService {
       options?.cycleTimeMs ?? this.config.notificationCycleTimeMs;
     const mode = options?.mode ?? "on-change";
 
-    const entry = {
+    const entry: Omit<PlcWatchEntry, "subscription"> = {
       cycleTimeMs,
       mode,
-    } as PlcWatchEntry;
+      ...(callback === undefined ? {} : { callback }),
+      ...(options?.maxDelayMs === undefined ? {} : { maxDelayMs: options.maxDelayMs }),
+    };
+    const isCurrent = () =>
+      generation === this.#disconnectGeneration && this.#watchRegistrations.get(name) === registration;
+    const registration: Promise<PlcWatchRegistration> = Promise.resolve()
+      .then(async () => {
+        if (!isCurrent()) throw new Error("PLC watch registration was closed.");
+        await this.connect();
+        if (!isCurrent()) throw new Error("PLC watch registration was closed.");
 
-    if (callback !== undefined) {
-      entry.callback = callback;
-    }
+        const subscription = await this.#subscribeWatch(name, entry);
+        if (!isCurrent()) {
+          void Promise.resolve().then(() => this.#client.unsubscribe(subscription)).catch(() => {});
+          throw new Error("PLC watch registration was closed.");
+        }
 
-    if (options?.maxDelayMs !== undefined) {
-      entry.maxDelayMs = options.maxDelayMs;
-    }
-
-    this.#watchCache.set(name, entry);
-    entry.subscription = await this.#subscribeWatch(name, entry);
-
-    if (entry.subscription.latestData) {
-      entry.lastValue = entry.subscription.latestData.value;
-      entry.lastTimestamp = entry.subscription.latestData.timestamp.toISOString();
-    }
-
-    return this.#toWatchRegistration(name, entry);
+        const registered = Object.assign(entry, { subscription });
+        this.#watchCache.set(name, registered);
+        return this.#toWatchRegistration(name, registered);
+      }).finally(() => {
+        if (this.#watchRegistrations.get(name) === registration) this.#watchRegistrations.delete(name);
+      });
+    this.#watchRegistrations.set(name, registration);
+    return registration;
   }
 
   async watchSymbol(
@@ -1944,8 +2007,6 @@ export class AdsService {
       throw new Error("PLC wait condition must reference at least one symbol.");
     }
 
-    await this.connect();
-
     const startedAtTime = Date.now();
     const startedAt = new Date(startedAtTime).toISOString();
     const stableForMs = input.stableForMs ?? 0;
@@ -1958,6 +2019,7 @@ export class AdsService {
       let stableSince: number | undefined;
       let stableTimer: ReturnType<typeof setTimeout> | undefined;
       let pollTimer: ReturnType<typeof setTimeout> | undefined;
+      let pendingOperation = Promise.resolve();
 
       const timeoutTimer = setTimeout(() => {
         finish("timeout");
@@ -1968,28 +2030,14 @@ export class AdsService {
       };
 
       const cleanup = async (): Promise<void> => {
-        clearTimeout(timeoutTimer);
-
-        if (stableTimer !== undefined) {
-          clearTimeout(stableTimer);
-        }
-
-        if (pollTimer !== undefined) {
-          clearTimeout(pollTimer);
-        }
-
-        input.signal?.removeEventListener("abort", abortHandler);
-
-        const cleanupErrors: Error[] = [];
-        for (const subscription of subscriptions) {
-          try {
-            await this.#client.unsubscribe(subscription);
-          } catch (error) {
-            cleanupErrors.push(
-              error instanceof Error ? error : new Error(String(error)),
-            );
-          }
-        }
+        const results = await Promise.allSettled(
+          subscriptions.splice(0).map(async subscription => this.#client.unsubscribe(subscription)),
+        );
+        const cleanupErrors = results.flatMap(result => {
+          if (result.status === "fulfilled") return [];
+          const error: unknown = result.reason;
+          return [error instanceof Error ? error : new Error(String(error))];
+        });
 
         if (cleanupErrors.length > 0) {
           this.#lastError = new AggregateError(
@@ -2004,15 +2052,35 @@ export class AdsService {
           .map((name) => values.get(name))
           .filter((value): value is PlcWaitValueSnapshot => value !== undefined);
 
+      const settle = (complete: () => void): void => {
+        settled = true;
+        clearTimeout(timeoutTimer);
+        clearTimeout(stableTimer);
+        clearTimeout(pollTimer);
+        input.signal?.removeEventListener("abort", abortHandler);
+        // Close existing subscriptions now and drain any late registration even
+        // if the caller has already proceeded to disconnect.
+        const teardown = Promise.all([cleanup(), pendingOperation.then(cleanup)]);
+        let cleanupTimer: ReturnType<typeof setTimeout>;
+        const deadline = new Promise<void>(resolve => {
+          cleanupTimer = setTimeout(resolve, this.dependencies.waitCleanupTimeoutMs ?? 2_000).unref();
+        });
+        void Promise.race([teardown, deadline]).finally(() => clearTimeout(cleanupTimer)).then(complete, reject);
+      };
+
+      const runOperation = (operation: () => Promise<void>): void => {
+        pendingOperation = Promise.resolve().then(operation).catch(error => {
+          if (!settled) settle(() => reject(error));
+        });
+      };
+
       const finish = (status: PlcWaitUntilStatus): void => {
         if (settled) {
           return;
         }
 
-        settled = true;
         const completedAtTime = Date.now();
-        void cleanup();
-        resolve({
+        const result: PlcWaitUntilResult = {
           status,
           conditionMatched: evaluateCondition(input.condition, values),
           startedAt,
@@ -2021,7 +2089,8 @@ export class AdsService {
           timeoutMs: input.timeoutMs,
           stableForMs,
           values: snapshotValues(),
-        });
+        };
+        settle(() => resolve(result));
       };
 
       const evaluate = (): void => {
@@ -2062,6 +2131,7 @@ export class AdsService {
       };
 
       const updateValue = (name: string, value: unknown, timestamp: Date): void => {
+        if (settled) return;
         values.set(name, {
           name,
           value,
@@ -2071,34 +2141,21 @@ export class AdsService {
       };
 
       const poll = async (): Promise<void> => {
-        try {
-          const results = await this.readMany(symbolNames);
-          for (const result of results) {
-            updateValue(result.name, result.value, new Date(result.timestamp));
-          }
-        } catch (error) {
-          if (!settled) {
-            settled = true;
-            void cleanup();
-            reject(error);
-          }
-          return;
+        if (settled) return;
+        const results = await this.readMany(symbolNames);
+        for (const result of results) {
+          updateValue(result.name, result.value, new Date(result.timestamp));
         }
 
         if (!settled) {
-          pollTimer = setTimeout(() => {
-            void poll();
-          }, cycleTimeMs);
+          pollTimer = setTimeout(() => runOperation(poll), cycleTimeMs);
         }
       };
 
       const subscribe = async (): Promise<void> => {
-        if (input.signal?.aborted) {
-          finish("cancelled");
-          return;
-        }
-
-        input.signal?.addEventListener("abort", abortHandler, { once: true });
+        if (settled || input.signal?.aborted) return;
+        await this.connect();
+        if (settled || input.signal?.aborted) return;
 
         try {
           for (const name of symbolNames) {
@@ -2114,12 +2171,8 @@ export class AdsService {
               input.maxDelayMs,
             );
 
-            if (settled) {
-              await this.#client.unsubscribe(subscription);
-              break;
-            }
-
             subscriptions.push(subscription);
+            if (settled) break;
             if (subscription.latestData) {
               updateValue(
                 name,
@@ -2143,29 +2196,23 @@ export class AdsService {
             }
           }
         } catch {
-          for (const subscription of subscriptions.splice(0)) {
-            try {
-              await this.#client.unsubscribe(subscription);
-            } catch {
-              // Best effort cleanup before falling back to polling.
-            }
-          }
-
-          await poll();
+          if (settled) return;
+          await cleanup();
+          if (!settled) await poll();
         }
       };
 
-      void subscribe().catch((error) => {
-        if (!settled) {
-          settled = true;
-          void cleanup();
-          reject(error);
-        }
-      });
+      if (input.signal?.aborted) {
+        abortHandler();
+      } else {
+        input.signal?.addEventListener("abort", abortHandler, { once: true });
+        runOperation(subscribe);
+      }
     });
   }
 
   async unwatchValue(name: string): Promise<PlcWatchSnapshot> {
+    this.#watchRegistrations.delete(name);
     const entry = this.#watchCache.get(name);
     if (!entry) {
       return {
@@ -2410,7 +2457,9 @@ export class AdsService {
   }
 
   async #loadSymbolCache(): Promise<void> {
+    const generation = this.#disconnectGeneration;
     const symbols = await this.#client.getSymbols();
+    if (generation !== this.#disconnectGeneration) return;
     this.#symbolCache.clear();
     this.#symbolLookupCache.clear();
 
@@ -2521,40 +2570,26 @@ export class AdsService {
 
   async #subscribeWatch(
     name: string,
-    entry: Pick<PlcWatchEntry, "callback" | "cycleTimeMs" | "mode" | "maxDelayMs">,
+    entry: Omit<PlcWatchEntry, "subscription">,
   ): Promise<ActiveSubscription<unknown>> {
     const subscription = await this.#client.subscribeValue(
       name,
-      this.#createWrappedWatchCallback(name, entry.callback),
+      (data, activeSubscription) => {
+        entry.lastValue = data.value;
+        entry.lastTimestamp = data.timestamp.toISOString();
+        entry.callback?.(data, activeSubscription);
+      },
       entry.cycleTimeMs,
       entry.mode === "on-change",
       entry.maxDelayMs,
     );
 
     if (subscription.latestData) {
-      const watchEntry = this.#watchCache.get(name);
-      if (watchEntry) {
-        watchEntry.lastValue = subscription.latestData.value;
-        watchEntry.lastTimestamp = subscription.latestData.timestamp.toISOString();
-      }
+      entry.lastValue = subscription.latestData.value;
+      entry.lastTimestamp = subscription.latestData.timestamp.toISOString();
     }
 
     return subscription;
-  }
-
-  #createWrappedWatchCallback(
-    name: string,
-    callback?: SubscriptionCallback<unknown>,
-  ): SubscriptionCallback<unknown> {
-    return (data: SubscriptionData<unknown>, subscription: ActiveSubscription<unknown>) => {
-      const entry = this.#watchCache.get(name);
-      if (entry) {
-        entry.lastValue = data.value;
-        entry.lastTimestamp = data.timestamp.toISOString();
-      }
-
-      callback?.(data, subscription);
-    };
   }
 
   #toWatchRegistration(

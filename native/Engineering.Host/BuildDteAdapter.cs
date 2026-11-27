@@ -132,7 +132,16 @@ namespace TwinCatMcp.Engineering.Host
             var budget = 512;
             foreach (var project in Items(Get(solution, "Solution", "Projects"), "Projects", 512)) Find(project, association.TwinCatProjectFile, matches, ref budget, 0);
             if (matches.Count != 1) Refuse("ambiguous_build_project");
-            if (dirty == null || dirty(projectFile) != false || dirty(solutionFile) != false || dirty(association.TwinCatProjectFile) != false) Refuse("unknown_dirty_state");
+            if (dirty == null) Refuse("unknown_dirty_state");
+            var unknownDirtyState = false;
+            foreach (var path in new[] { projectFile, solutionFile, association.TwinCatProjectFile })
+            {
+                bool? state;
+                try { state = dirty(path); } catch { state = null; }
+                if (state == true) Refuse("unsaved_project_changes");
+                if (state != false) unknownDirtyState = true;
+            }
+            if (unknownDirtyState) Refuse("unknown_dirty_state");
             foreach (var document in Items(Get(dte, "DTE", "Documents"), "Documents", 256))
                 if (!(bool)Get(document, "Document", "Saved") || dirty((string)Get(document, "Document", "FullName")) != false) Refuse("dirty_or_unknown_document");
             BuildProjectPolicy.Validate(projectFile);
