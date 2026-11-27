@@ -7,9 +7,9 @@ internal static class BuildChecks
 {
     private static int checks;
     private static void Expect(bool value, string name) { if (!value) throw new Exception(name); checks++; }
-    private static void Throws(Action action, string status, string name)
+    private static void Throws(Action action, string status, string name, string code = null)
     {
-        try { action(); } catch (NativeBuildException error) { Expect(error.Status == status, name); return; }
+        try { action(); } catch (NativeBuildException error) { Expect(error.Status == status && (code == null || error.Code == code), name); return; }
         throw new Exception(name);
     }
     public static int Main()
@@ -143,17 +143,40 @@ internal static class BuildChecks
         var import = "<Import Project=\"$(MSBuildExtensionsPath)\\Beckhoff\\TwinCAT\\v3.1\\TcPlcProject.targets\" />";
         try
         {
-            File.WriteAllText(file, "<Project>" + import + "</Project>");
+            const string project = "<Project DefaultTargets=\"Build\" xmlns=\"http://schemas.microsoft.com/developer/msbuild/2003\">";
+            const string standardProjectContents = @"
+  <PropertyGroup><Name>PLC</Name><TmcFilePath>PLC.tmc</TmcFilePath></PropertyGroup>
+  <ItemGroup>
+    <Compile Include=""POUs\MAIN.TcPOU""><SubType>Code</SubType></Compile>
+    <Folder Include=""POUs"" />
+    <LibraryReference Include=""Tc2_System""><Namespace>Tc2_System</Namespace></LibraryReference>
+    <PlaceholderReference Include=""Tc2_Standard""><DefaultResolution>Tc2_Standard, * (Beckhoff Automation GmbH)</DefaultResolution></PlaceholderReference>
+    <PlaceholderResolution Include=""Tc2_Standard""><Resolution>Tc2_Standard, * (Beckhoff Automation GmbH)</Resolution></PlaceholderResolution>
+  </ItemGroup>
+  <ProjectExtensions><LineIds Name=""MAIN""><LineId Id=""1"" Count=""0"" /></LineIds></ProjectExtensions>";
+            const string unsafeProject = "unsafe_build_project";
+            File.WriteAllText(file, project + standardProjectContents + "</Project>");
             BuildProjectPolicy.Validate(file); checks++;
-            File.WriteAllText(file, "<Project><Target Name=\"bad\" />" + import + "</Project>");
-            Throws(() => BuildProjectPolicy.Validate(file), "refused", "custom target refused");
-            File.WriteAllText(file, "<Project><PropertyGroup><prebuildEvent>bad</prebuildEvent></PropertyGroup>" + import + "</Project>");
-            Throws(() => BuildProjectPolicy.Validate(file), "refused", "case insensitive build hook refused");
-            File.WriteAllText(file, "<Project><PropertyGroup><Any>$([System.IO.File]::ReadAllText('x'))</Any></PropertyGroup>" + import + "</Project>");
-            Throws(() => BuildProjectPolicy.Validate(file), "refused", "MSBuild property function refused");
-            File.WriteAllText(file, "<Project>" + import + "</Project>");
+            File.WriteAllText(file, project + standardProjectContents + import + "</Project>");
+            BuildProjectPolicy.Validate(file); checks++;
+            File.WriteAllText(file, project + import + import + "</Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "duplicate import refused", unsafeProject);
+            var lowercaseImport = import.Replace("<Import ", "<import ");
+            File.WriteAllText(file, project + lowercaseImport + lowercaseImport + "</Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "duplicate lowercase import refused", unsafeProject);
+            File.WriteAllText(file, project + "<Import Project=\"foreign.targets\" /></Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "foreign import refused", unsafeProject);
+            File.WriteAllText(file, project + import.Replace(" />", " Condition=\"true\" />") + "</Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "conditional allowlisted import refused", unsafeProject);
+            File.WriteAllText(file, project + "<Target Name=\"bad\" /></Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "custom target refused without import", unsafeProject);
+            File.WriteAllText(file, project + "<PropertyGroup><prebuildEvent>bad</prebuildEvent></PropertyGroup></Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "case insensitive build hook refused without import", unsafeProject);
+            File.WriteAllText(file, project + "<PropertyGroup><Any>$([System.IO.File]::ReadAllText('x'))</Any></PropertyGroup></Project>");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "MSBuild property function refused without import", unsafeProject);
+            File.WriteAllText(file, project + "</Project>");
             File.WriteAllText(Path.Combine(dir, "Directory.Build.props"), "<Project />");
-            Throws(() => BuildProjectPolicy.Validate(file), "refused", "ancestor hook refused");
+            Throws(() => BuildProjectPolicy.Validate(file), "refused", "ancestor hook refused without import", unsafeProject);
         }
         finally
         {

@@ -1,11 +1,13 @@
 # Release Flow
 
-## Engineering 0.5.12 read-only Debug waits and watches
+## Engineering 0.5.13 TwinCAT build preflight compatibility
 
-The Debug catalog grows from 11 to 15 tools. Wait and watch operations use the
-host-bound grant, sanitize scalar values, and bound teardown. Build preflight
-short-circuits each file's dirty checks and reports `unsaved_project_changes`
-for confirmed changes or `unknown_dirty_state` when the evidence is incomplete.
+Engineering 0.5.13 accepts PLC projects with zero imports or one allowlisted
+import and detects duplicate import element names case-insensitively. On
+TwinCAT 3.1.4024.78, if a nested PLC dependency owner's
+`BuildDependency.Project.UniqueName` returns COM `E_FAIL`, build preflight
+verifies the owner against the attested PLC project using `FullName` and the
+solution-relative project path.
 
 Build from the clean, merged commit with `scripts/Build-EngineeringRelease.ps1`.
 The builder hashes `git archive --format=tar <release-commit> native/Engineering.Host`
@@ -19,7 +21,7 @@ for `receipt.module.sourceTreeSha256`. Reproduce that hash using the exact
 | Debug | `engineering-debug-catalog.json` | 15 |
 
 Pin the schema 2 receipt and each downloaded asset from the
-[0.5.12 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.12).
+[0.5.13 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.13).
 Record the assembled Core/MCP runtime audit in the release notes.
 
 ## Historical Engineering 0.5.9 Automation Interface ST Editor

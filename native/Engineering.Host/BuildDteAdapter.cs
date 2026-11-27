@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.IO;
 
 namespace TwinCatMcp.Engineering.Host
@@ -34,6 +35,7 @@ namespace TwinCatMcp.Engineering.Host
     // interop DLL is shipped or loaded, and no ROT or process lookup occurs here.
     internal sealed class BuildDteAdapter : IBuildIde
     {
+        private const int EFail = unchecked((int)0x80004005);
         private readonly object dte;
         private readonly EngineeringInteropTypes interopTypes;
         private readonly List<Action> unsubscribe = new List<Action>();
@@ -166,7 +168,7 @@ namespace TwinCatMcp.Engineering.Host
                     (string)Get(context, "SolutionContext", "PlatformName") != target.Platform) Refuse("build_configuration_mismatch");
             }
             if (contexts != 1) Refuse("ambiguous_build_configuration");
-            RequireNoDependencies(target.UniqueName);
+            RequireNoDependencies(solutionFile, target.UniqueName, projectFile);
             return target;
         }
 
@@ -176,13 +178,22 @@ namespace TwinCatMcp.Engineering.Host
             catch { return false; }
         }
 
-        private void RequireNoDependencies(string uniqueName)
+        private void RequireNoDependencies(string solutionFile, string uniqueName, string projectFile)
         {
             try
             {
                 var dependency = Call(Get(SolutionBuild, "SolutionBuild", "BuildDependencies"), "BuildDependencies", "Item", uniqueName);
                 var owner = Get(dependency, "BuildDependency", "Project");
-                if (!Same((string)Get(owner, "Project", "UniqueName"), uniqueName)) Refuse("dependency_identity_mismatch");
+                try
+                {
+                    if (!Same((string)Get(owner, "Project", "UniqueName"), uniqueName)) Refuse("dependency_identity_mismatch");
+                }
+                catch (Exception error) when ((error is TargetInvocationException ? error.InnerException : error) is COMException comError && comError.HResult == EFail)
+                {
+                    // TwinCAT 3.1.4024.78 can return E_FAIL for a nested PLC project's UniqueName.
+                    var ownerFullName = (string)Get(owner, "Project", "FullName");
+                    if (!MatchesPlcPath(solutionFile, uniqueName, projectFile) || !Same(ownerFullName, projectFile)) Refuse("dependency_identity_mismatch");
+                }
                 var required = Get(dependency, "BuildDependency", "RequiredProjects") as Array;
                 if (required == null || required.Length != 0) Refuse("build_dependencies_not_supported");
             }

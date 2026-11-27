@@ -12,14 +12,16 @@ The packages share one TypeScript workspace and one ADS domain layer. Protocol
 adapters stay thin: Pi owns lifecycle hooks and context injection, MCP owns MCP
 tool registration and stdio transport, and the core owns ADS operations.
 
-## Engineering 0.5.12 read-only Debug waits and watches
+## Engineering 0.5.13 TwinCAT build preflight compatibility
 
-Engineering 0.5.12 adds four tools to the host-bound Debug profile:
-`plc_debug_wait_until`, `plc_debug_watch`, `plc_debug_unwatch`, and
-`plc_debug_list_watches`. Build preflight now distinguishes confirmed unsaved
-project changes from unavailable dirty-state evidence.
+Engineering 0.5.13 accepts PLC projects with zero imports or one allowlisted
+import and detects duplicate import element names case-insensitively. On
+TwinCAT 3.1.4024.78, if a nested PLC dependency owner's
+`BuildDependency.Project.UniqueName` returns COM `E_FAIL`, build preflight
+verifies the owner against the attested PLC project using `FullName` and the
+solution-relative project path.
 
-Use the [Engineering 0.5.12 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.12)
+Use the [Engineering 0.5.13 release](https://github.com/Auda29/twincat-mcp-mono/releases/tag/engineering-v0.5.13)
 and verify the schema 2 receipt and downloaded assets. The Build, Editor, and
 Debug catalogs contain 9, 16, and 15 tools respectively.
 

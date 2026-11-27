@@ -7,7 +7,7 @@ namespace EnvDTE {
  public interface Solution : _Solution { }
  public interface _Solution { string FullName {get;} bool Saved {get;} Projects Projects {get;} SolutionBuild SolutionBuild {get;} }
  public interface Projects { int Count {get;} object Item(object index); }
- public interface Project { string FileName {get;} string Kind {get;} object Object {get;} object ProjectItems {get;} bool Saved {get;} string UniqueName {get;} }
+ public interface Project { string FileName {get;} string Kind {get;} object Object {get;} object ProjectItems {get;} bool Saved {get;} string UniqueName {get;} string FullName {get;} }
  public interface ProjectItems { int Count {get;} object Item(object index); }
  public interface ProjectItem { object SubProject {get;} }
  public interface Documents { int Count {get;} object Item(object index); }
