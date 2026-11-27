@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { PlcWaitUntilInput, PlcWaitUntilResult, PlcWatchSnapshot, WatchSymbolOptions } from "twincat-mcp-core";
+import {
+  AdsService, normalizeTwinCatAdsConfig,
+  type PlcWaitUntilInput, type PlcWaitUntilResult, type PlcWatchSnapshot, type WatchSymbolOptions,
+} from "twincat-mcp-core";
 import { createDebugLiveTools } from "../src/debug-live-tools.js";
 
 const grant = { loggedIn: true, grantId: randomUUID(), amsNetId: "1.2.3.4.5.6", adsPort: 856, symbols: ["MAIN.ready", "MAIN.cycle"] };
@@ -30,7 +33,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function setup(invoke = vi.fn().mockResolvedValue(response())) {
+function setup(invoke = vi.fn().mockResolvedValue(response()), cleanupTimeoutMs?: number) {
   const shutdown = new AbortController();
   sessions.add(shutdown);
   const activeWatches = new Map<string, PlcWatchSnapshot>();
@@ -52,7 +55,7 @@ function setup(invoke = vi.fn().mockResolvedValue(response())) {
   });
   const listWatches = vi.fn(() => [...activeWatches.values()]);
   const open = vi.fn(() => ({ hasActiveConnection: true, readSymbol, waitUntil, watchSymbol, unwatchSymbol, listWatches, disconnect }));
-  const tools = createDebugLiveTools(invoke, open, shutdown.signal);
+  const tools = createDebugLiveTools(invoke, open, shutdown.signal, cleanupTimeoutMs);
   const tool = (name: string) => tools.find(tool => tool.name === "plc_debug_" + name)!;
   return {
     read: tool("read"), state: tool("state"), wait: tool("wait_until"), watch: tool("watch"),
@@ -301,6 +304,73 @@ describe("bound Debug ADS waits", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it.each(["subscribeValue", "unsubscribe"] as const)(
+    "finishes and releases the read slot when ADS %s never settles",
+    async blocked => {
+      vi.useFakeTimers();
+      const { wait, read, invoke, waitUntil, disconnect: disconnectReader } = setup(undefined, 50);
+      const config = normalizeTwinCatAdsConfig({ targetAmsNetId: grant.amsNetId, readOnly: true });
+      const service = new AdsService(config, { waitCleanupTimeoutMs: 25 });
+      vi.spyOn(service, "connect").mockResolvedValue(service.client.connection);
+      const subscribe = vi.spyOn(service.client, "subscribeValue");
+      const unsubscribe = vi.spyOn(service.client, "unsubscribe");
+      const disconnect = vi.spyOn(service, "disconnect");
+      const never = new Promise<never>(() => {});
+      if (blocked === "subscribeValue") {
+        subscribe.mockReturnValue(never);
+        unsubscribe.mockResolvedValue(undefined);
+        disconnect.mockResolvedValue(undefined);
+      } else {
+        subscribe.mockResolvedValue({
+          latestData: { value: false, timestamp: new Date(observation.timestamp) },
+        } as Awaited<ReturnType<typeof service.client.subscribeValue>>);
+        unsubscribe.mockReturnValue(never);
+        disconnect.mockReturnValue(never);
+      }
+      waitUntil.mockImplementationOnce(service.waitUntil.bind(service));
+      disconnectReader.mockImplementationOnce(service.disconnect.bind(service));
+
+      const revoking = blocked === "unsubscribe";
+      const pending = wait.execute({ ...waitArgs, timeoutMs: revoking ? 10_000 : 100 });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(subscribe).toHaveBeenCalledOnce();
+      if (revoking) invoke.mockResolvedValue(response(null));
+      await vi.advanceTimersByTimeAsync((revoking ? 2_000 : 100) + 24);
+      expect(disconnect).not.toHaveBeenCalled();
+      expect(unsubscribe).toHaveBeenCalledTimes(revoking ? 1 : 0);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(disconnect).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(50);
+      if (revoking) {
+        expect(await pending).toEqual({ status: "online_context_changed" });
+        invoke.mockResolvedValue(response({ ...grant, grantId: randomUUID() }));
+      } else {
+        expect(await pending).toMatchObject({ status: "succeeded", waitStatus: "timeout" });
+      }
+      expect(vi.getTimerCount()).toBe(0);
+      expect(await read.execute({ symbols: [condition.name] })).toMatchObject({ status: "succeeded" });
+    },
+  );
+
+  it("stops a stuck grant monitor and releases the read slot without returning samples", async () => {
+    vi.useFakeTimers();
+    const { wait, read, invoke, waitUntil, disconnect } = setup(undefined, 50);
+    const result = deferred<PlcWaitUntilResult>();
+    waitUntil.mockReturnValue(result.promise);
+    invoke.mockResolvedValueOnce(response()).mockImplementationOnce(() => new Promise(() => {}));
+    const pending = wait.execute(waitArgs);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(invoke).toHaveBeenCalledTimes(2);
+
+    result.resolve(waitResult);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await pending).toEqual({ status: "online_context_changed" });
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(await read.execute({ symbols: [condition.name] })).toMatchObject({ status: "succeeded" });
+  });
+
   it("discards a completed wait if the final verification changes the context", async () => {
     const { wait, waitUntil, invoke, disconnect } = setup();
     invoke.mockResolvedValueOnce(response()).mockResolvedValueOnce(response({ ...grant, adsPort: 857 }));
@@ -366,6 +436,26 @@ describe("bound Debug ADS watches", () => {
     expect(await list.execute({})).toEqual({ status: "succeeded", source: "ads_live", watches: [], count: 0 });
   });
 
+  it.each([
+    { label: "stays revoked", after: null },
+    { label: "is reported online again", after: grant },
+  ])("discards the final watch snapshot after revocation when the grant $label", async ({ after }) => {
+    const { watch, unwatch, disconnect, state, invoke } = setup();
+    const name = condition.name;
+    await watch.execute({ name });
+    const disconnecting = deferred<void>();
+    const resume = deferred<void>();
+    disconnect.mockImplementationOnce(() => { disconnecting.resolve(); return resume.promise; });
+
+    const removal = unwatch.execute({ name });
+    await disconnecting.promise;
+    invoke.mockResolvedValue(response(null));
+    expect(await state.execute({})).toEqual({ status: "online_session_not_verified" });
+    invoke.mockResolvedValue(response(after));
+    resume.resolve();
+    expect(await removal).toEqual({ status: "online_context_changed" });
+  });
+
   it("reports non-scalar and oversized samples without returning the raw value or notification handle", async () => {
     const { watch, list, activeWatches } = setup();
     const name = condition.name;
@@ -423,9 +513,32 @@ describe("bound Debug ADS watches", () => {
         expect(result).toEqual({ status: "online_context_changed" });
       expect(session.disconnect).toHaveBeenCalledOnce();
       expect(session.activeWatches.size).toBe(0);
-      expect(await session.list.execute({})).toEqual({ status: "online_context_changed" });
+      const next = await session.list.execute({});
+      if (key === "unwatch" || key === "list") expect(next).toMatchObject({ status: "succeeded", count: 0 });
+      else expect(next).toEqual({ status: "online_context_changed" });
     },
   );
+
+  it("reports an unverified online session when there have been no watches", async () => {
+    const { list, unwatch, watch, open } = setup(vi.fn().mockResolvedValue(response(null)));
+    expect(await list.execute({})).toEqual({ status: "online_session_not_verified" });
+    expect(await unwatch.execute({ name: condition.name })).toEqual({ status: "online_session_not_verified" });
+    expect(await watch.execute({ name: condition.name })).toEqual({ status: "online_session_not_verified" });
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it.each(["list", "unwatch"] as const)("reports watch revocation once through %s under a fresh grant", async key => {
+    const session = setup();
+    await session.watch.execute({ name: condition.name });
+    session.invoke.mockResolvedValue(response(null));
+    await session.state.execute({});
+    session.invoke.mockResolvedValue(response({ ...grant, grantId: randomUUID() }));
+
+    const args = key === "list" ? {} : { name: condition.name };
+    expect(await session[key].execute(args)).toEqual({ status: "online_context_changed" });
+    expect(await session[key].execute(args)).toMatchObject({ status: "succeeded" });
+    expect(await session.list.execute({})).toMatchObject({ status: "succeeded", count: 0 });
+  });
 
   it.each([null, { ...grant, amsNetId: "1.2.3.4.5.7" }])("monitors and tears down watches without another tool call: %j", async target => {
     vi.useFakeTimers();
@@ -439,7 +552,9 @@ describe("bound Debug ADS watches", () => {
   });
 
   it("cleans up a subscription that arrives after revocation during registration", async () => {
+    vi.useFakeTimers();
     const { watch, state, invoke, watchSymbol, disconnect, activeWatches } = setup();
+    await watch.execute({ name: "MAIN.cycle" });
     const started = deferred<void>();
     const resume = deferred<void>();
     const register = watchSymbol.getMockImplementation()!;
@@ -452,11 +567,39 @@ describe("bound Debug ADS watches", () => {
     await started.promise;
     invoke.mockResolvedValue(response(null));
     expect(await state.execute({})).toEqual({ status: "online_session_not_verified" });
-    expect(disconnect).not.toHaveBeenCalled();
-    resume.resolve();
-    expect(await registration).toEqual({ status: "online_context_changed" });
     expect(disconnect).toHaveBeenCalledOnce();
     expect(activeWatches.size).toBe(0);
+    expect(await registration).toEqual({ status: "online_context_changed" });
+    resume.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(disconnect).toHaveBeenCalledTimes(2);
+    expect(activeWatches.size).toBe(0);
+  });
+
+  it("disconnects immediately and recovers under a new grant if watch registration and cleanup hang", async () => {
+    vi.useFakeTimers();
+    const { watch, state, invoke, watchSymbol, disconnect, open, activeWatches } = setup(undefined, 50);
+    await watch.execute({ name: "MAIN.cycle" });
+    const never = new Promise<never>(() => {});
+    watchSymbol.mockReturnValueOnce(never);
+    disconnect.mockImplementationOnce(() => { activeWatches.clear(); return never; });
+    const registration = watch.execute({ name: condition.name });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(watchSymbol).toHaveBeenCalledTimes(2);
+
+    invoke.mockResolvedValue(response(null));
+    expect(await state.execute({})).toEqual({ status: "online_session_not_verified" });
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(activeWatches.size).toBe(0);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await registration).toEqual({ status: "online_context_changed" });
+    expect(vi.getTimerCount()).toBe(0);
+
+    const fresh = { ...grant, grantId: randomUUID() };
+    invoke.mockResolvedValue(response(fresh));
+    expect(await watch.execute({ name: condition.name })).toMatchObject({ status: "succeeded" });
+    expect(open).toHaveBeenCalledTimes(2);
+    expect(open).toHaveBeenLastCalledWith(fresh);
   });
 
   it("rejects a stale context response that arrives after a newer revocation", async () => {
@@ -481,8 +624,8 @@ describe("bound Debug ADS watches", () => {
     await watch.execute({ name: condition.name });
     shutdown.abort();
     expect(disconnect).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
     expect(await list.execute({})).toEqual({ status: "online_context_changed" });
+    expect(vi.getTimerCount()).toBe(0);
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
@@ -492,5 +635,17 @@ describe("bound Debug ADS watches", () => {
     expect(await watch.execute({ name: condition.name })).toEqual({ status: "live_read_unavailable" });
     expect(disconnect).toHaveBeenCalledOnce();
     expect(await list.execute({})).toMatchObject({ status: "succeeded", count: 0 });
+  });
+
+  it("preserves a healthy existing watch when another symbol cannot be registered", async () => {
+    const { watch, watchSymbol, list, disconnect } = setup(vi.fn().mockResolvedValue(response(allGrant)));
+    expect(await watch.execute({ name: "GVL.Good" })).toMatchObject({ status: "succeeded" });
+    watchSymbol.mockRejectedValueOnce(new Error("ADS symbol not found"));
+
+    expect(await watch.execute({ name: "GVL.Missing" })).toEqual({ status: "live_read_unavailable" });
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(await list.execute({})).toMatchObject({
+      status: "succeeded", count: 1, watches: [{ name: "GVL.Good", active: true }],
+    });
   });
 });

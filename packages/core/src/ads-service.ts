@@ -14,7 +14,6 @@ import {
   type ReadRawMultiResult,
   type ReadValueResult,
   type SubscriptionCallback,
-  type SubscriptionData,
   type VariableHandle,
   type WriteValueResult,
 } from "ads-client";
@@ -45,6 +44,8 @@ import {
 export interface AdsServiceDependencies {
   /** Disable automatic reconnection for clients whose access depends on a live grant. */
   readonly autoReconnect?: boolean;
+  /** Maximum time to drain a PLC wait before returning its result. Defaults to 2 seconds. */
+  readonly waitCleanupTimeoutMs?: number;
   readonly logger?: Pick<Console, "debug" | "error" | "info" | "warn">;
   readonly diagnostics?: RuntimeDiagnosticsDependencies;
 }
@@ -1172,12 +1173,14 @@ export class AdsService {
   readonly #symbolLookupCache = new Map<string, AdsSymbol>();
   readonly #handleCache = new Map<string, VariableHandle>();
   readonly #watchCache = new Map<string, PlcWatchEntry>();
+  readonly #watchRegistrations = new Map<string, Promise<PlcWatchRegistration>>();
 
   #state: AdsConnectionState = "disconnected";
   #lastError: Error | undefined;
   #connectPromise: Promise<AdsClientConnection> | undefined;
   #symbolsLoaded = false;
   #writeMode: PlcWriteMode = "read-only";
+  #watchGeneration = 0;
   private readonly config: ExtensionRuntimeConfig;
   private readonly runtimeDiagnostics: RuntimeDiagnostics;
 
@@ -1296,6 +1299,8 @@ export class AdsService {
   }
 
   async disconnect(): Promise<void> {
+    this.#watchGeneration++;
+    this.#watchRegistrations.clear();
     const watchEntries = [...this.#watchCache.values()];
     const cleanupErrors: Error[] = [];
 
@@ -1901,14 +1906,19 @@ export class AdsService {
       readonly maxDelayMs?: number;
     },
   ): Promise<PlcWatchRegistration> {
+    const generation = this.#watchGeneration;
     await this.connect();
+    if (generation !== this.#watchGeneration) throw new Error("PLC watch registration was closed.");
 
     const existing = this.#watchCache.get(name);
     if (existing) {
       return this.#toWatchRegistration(name, existing);
     }
 
-    if (this.#watchCache.size >= this.config.maxNotifications) {
+    const pending = this.#watchRegistrations.get(name);
+    if (pending) return pending;
+
+    if (this.#watchCache.size + this.#watchRegistrations.size >= this.config.maxNotifications) {
       throw new Error(
         `Notification limit reached (${this.config.maxNotifications}).`,
       );
@@ -1918,28 +1928,27 @@ export class AdsService {
       options?.cycleTimeMs ?? this.config.notificationCycleTimeMs;
     const mode = options?.mode ?? "on-change";
 
-    const entry = {
+    const entry: Omit<PlcWatchEntry, "subscription"> = {
       cycleTimeMs,
       mode,
-    } as PlcWatchEntry;
+      ...(callback === undefined ? {} : { callback }),
+      ...(options?.maxDelayMs === undefined ? {} : { maxDelayMs: options.maxDelayMs }),
+    };
+    const registration: Promise<PlcWatchRegistration> = this.#subscribeWatch(name, entry)
+      .then(subscription => {
+        if (this.#watchRegistrations.get(name) !== registration) {
+          void Promise.resolve().then(() => this.#client.unsubscribe(subscription)).catch(() => {});
+          throw new Error("PLC watch registration was closed.");
+        }
 
-    if (callback !== undefined) {
-      entry.callback = callback;
-    }
-
-    if (options?.maxDelayMs !== undefined) {
-      entry.maxDelayMs = options.maxDelayMs;
-    }
-
-    this.#watchCache.set(name, entry);
-    entry.subscription = await this.#subscribeWatch(name, entry);
-
-    if (entry.subscription.latestData) {
-      entry.lastValue = entry.subscription.latestData.value;
-      entry.lastTimestamp = entry.subscription.latestData.timestamp.toISOString();
-    }
-
-    return this.#toWatchRegistration(name, entry);
+        const registered = Object.assign(entry, { subscription });
+        this.#watchCache.set(name, registered);
+        return this.#toWatchRegistration(name, registered);
+      }).finally(() => {
+        if (this.#watchRegistrations.get(name) === registration) this.#watchRegistrations.delete(name);
+      });
+    this.#watchRegistrations.set(name, registration);
+    return registration;
   }
 
   async watchSymbol(
@@ -2014,9 +2023,14 @@ export class AdsService {
         clearTimeout(stableTimer);
         clearTimeout(pollTimer);
         input.signal?.removeEventListener("abort", abortHandler);
-        // Subscription setup or a fallback read can still be in flight. Close
-        // every subscription before the caller can disconnect the ADS client.
-        void pendingOperation.then(cleanup).then(complete, reject);
+        // Close existing subscriptions now and drain any late registration even
+        // if the caller has already proceeded to disconnect.
+        const teardown = Promise.all([cleanup(), pendingOperation.then(cleanup)]);
+        let cleanupTimer: ReturnType<typeof setTimeout>;
+        const deadline = new Promise<void>(resolve => {
+          cleanupTimer = setTimeout(resolve, this.dependencies.waitCleanupTimeoutMs ?? 2_000).unref();
+        });
+        void Promise.race([teardown, deadline]).finally(() => clearTimeout(cleanupTimer)).then(complete, reject);
       };
 
       const runOperation = (operation: () => Promise<void>): void => {
@@ -2516,40 +2530,26 @@ export class AdsService {
 
   async #subscribeWatch(
     name: string,
-    entry: Pick<PlcWatchEntry, "callback" | "cycleTimeMs" | "mode" | "maxDelayMs">,
+    entry: Omit<PlcWatchEntry, "subscription">,
   ): Promise<ActiveSubscription<unknown>> {
     const subscription = await this.#client.subscribeValue(
       name,
-      this.#createWrappedWatchCallback(name, entry.callback),
+      (data, activeSubscription) => {
+        entry.lastValue = data.value;
+        entry.lastTimestamp = data.timestamp.toISOString();
+        entry.callback?.(data, activeSubscription);
+      },
       entry.cycleTimeMs,
       entry.mode === "on-change",
       entry.maxDelayMs,
     );
 
     if (subscription.latestData) {
-      const watchEntry = this.#watchCache.get(name);
-      if (watchEntry) {
-        watchEntry.lastValue = subscription.latestData.value;
-        watchEntry.lastTimestamp = subscription.latestData.timestamp.toISOString();
-      }
+      entry.lastValue = subscription.latestData.value;
+      entry.lastTimestamp = subscription.latestData.timestamp.toISOString();
     }
 
     return subscription;
-  }
-
-  #createWrappedWatchCallback(
-    name: string,
-    callback?: SubscriptionCallback<unknown>,
-  ): SubscriptionCallback<unknown> {
-    return (data: SubscriptionData<unknown>, subscription: ActiveSubscription<unknown>) => {
-      const entry = this.#watchCache.get(name);
-      if (entry) {
-        entry.lastValue = data.value;
-        entry.lastTimestamp = data.timestamp.toISOString();
-      }
-
-      callback?.(data, subscription);
-    };
   }
 
   #toWatchRegistration(

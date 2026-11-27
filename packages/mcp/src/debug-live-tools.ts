@@ -88,7 +88,7 @@ interface WatchSession {
   identity: string;
   reader: DebugReader;
   monitor: ReturnType<typeof setInterval>;
-  pendingOperation?: Promise<PlcWatchSnapshot> | undefined;
+  pendingOperation?: { completion: Promise<PlcWatchSnapshot>; cancel: () => void } | undefined;
 }
 
 function openReadOnlyAds(target: DebugTarget): DebugReader {
@@ -143,6 +143,7 @@ export function createDebugLiveTools(
   invoke: InvokeHost,
   openReader: OpenReader = openReadOnlyAds,
   shutdown?: AbortSignal,
+  cleanupTimeoutMs = 2_000,
 ): McpToolDefinition[] {
   let reading = false;
   let activeWait: { identity: string; controller: AbortController } | undefined;
@@ -153,17 +154,29 @@ export function createDebugLiveTools(
   let nextContextCheck = 0;
   let latestContextCheck = 0;
   let latestIdentity: string | undefined;
+  let contextRevision = 0;
+
+  async function boundCleanup(operation: Promise<unknown>, onTimeout?: () => void): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<void>(resolve => {
+      timer = setTimeout(() => { onTimeout?.(); resolve(); }, cleanupTimeoutMs).unref();
+    });
+    try { await Promise.race([operation, deadline]); }
+    finally { clearTimeout(timer); }
+  }
 
   function closeWatches(session: WatchSession, contextChanged = false) {
     if (watchSession !== session) return;
     watchSession = undefined;
     watchContextChanged = contextChanged;
     clearInterval(session.monitor);
+    watchCleanup = boundCleanup(disconnectReader(session.reader));
     // A subscription can arrive after revocation while its ADS request is in flight.
-    // Disconnect after that request settles so it cannot reopen or outlive the reader.
     const pending = session.pendingOperation;
-    watchCleanup = pending === undefined ? disconnectReader(session.reader)
-      : pending.then(() => disconnectReader(session.reader), () => disconnectReader(session.reader));
+    if (pending) {
+      pending.cancel();
+      void pending.completion.finally(() => disconnectReader(session.reader)).catch(() => {});
+    }
   }
 
   shutdown?.addEventListener("abort", () => {
@@ -180,14 +193,14 @@ export function createDebugLiveTools(
         if (envelope.success && !shutdown?.aborted) target = envelope.data.result;
       } catch { /* A failed context check invalidates the grant. */ }
     }
-    let identity = JSON.stringify(target);
+    const identity = JSON.stringify(target);
     if (check > latestContextCheck) {
       latestContextCheck = check;
+      if (identity !== latestIdentity) contextRevision++;
       latestIdentity = identity;
     } else if (identity !== latestIdentity) {
-      // A slower response must not reauthorize a superseded context.
-      target = null;
-      identity = "null";
+      // Fail this check without changing sessions verified by a newer check.
+      return undefined;
     }
     if (activeWait && identity !== activeWait.identity) activeWait.controller.abort();
     if (watchSession && identity !== watchSession.identity) closeWatches(watchSession, true);
@@ -233,7 +246,10 @@ export function createDebugLiveTools(
     }
   }
 
-  async function withWatchAccess(run: (target: DebugTarget) => Promise<unknown> | unknown) {
+  async function withWatchAccess(
+    run: (target: DebugTarget) => Promise<{ status: string }> | { status: string },
+    reportRevocation = false,
+  ) {
     if (watching) {
       await onlineTarget();
       return { status: "busy" };
@@ -243,7 +259,11 @@ export function createDebugLiveTools(
       const previous = watchSession;
       await watchCleanup;
       const target = await onlineTarget();
-      if (!target || shutdown?.aborted || JSON.stringify(target) !== latestIdentity || (previous && previous !== watchSession)) {
+      if (target === null && !previous && !watchContextChanged)
+        return { status: "online_session_not_verified" };
+      if (!target || shutdown?.aborted || JSON.stringify(target) !== latestIdentity ||
+          (previous && previous !== watchSession) || (reportRevocation && watchContextChanged)) {
+        if (reportRevocation && !watchSession) watchContextChanged = false;
         await watchCleanup;
         return { status: "online_context_changed" };
       }
@@ -252,7 +272,9 @@ export function createDebugLiveTools(
         await watchCleanup;
         return { status: "live_read_unavailable" };
       }
-      return await run(target);
+      const result = await run(target);
+      if (reportRevocation && result.status === "online_context_changed" && !watchSession) watchContextChanged = false;
+      return result;
     } catch {
       if (watchSession) closeWatches(watchSession);
       await watchCleanup;
@@ -262,23 +284,39 @@ export function createDebugLiveTools(
     }
   }
 
-  async function performWatchOperation(session: WatchSession, operation: () => Promise<PlcWatchSnapshot>) {
+  async function performWatchOperation(
+    session: WatchSession,
+    operation: () => Promise<PlcWatchSnapshot>,
+    keepHealthyWatchesOnError = false,
+  ) {
     try {
-      session.pendingOperation = operation();
-      const watch = await session.pendingOperation;
+      let cancel!: () => void;
+      const revoked = new Promise<undefined>(resolve => { cancel = () => resolve(undefined); });
+      const completion = operation();
+      session.pendingOperation = { completion, cancel };
+      const watch = await Promise.race([completion, revoked]);
       session.pendingOperation = undefined;
-      await onlineTarget();
-      if (watchSession !== session) {
+      const target = watch && watchSession === session ? await onlineTarget() : null;
+      if (!watch || !target || watchSession !== session) {
         await watchCleanup;
         return { status: "online_context_changed" };
       }
       if (session.reader.listWatches().length === 0) {
+        // A concurrent state check can observe revocation during disconnect.
+        const revision = contextRevision;
         closeWatches(session);
         await watchCleanup;
+        const after = await onlineTarget();
+        if (!after || JSON.stringify(after) !== session.identity || contextRevision !== revision || shutdown?.aborted)
+          return { status: "online_context_changed" };
       }
       return { status: "succeeded", source: "ads_live", watch: watchSnapshot(watch) };
     } catch (error) {
-      if (watchSession === session) throw error;
+      if (watchSession === session) {
+        if (keepHealthyWatchesOnError && session.reader.hasActiveConnection !== false && session.reader.listWatches().length > 0)
+          return { status: "live_read_unavailable" };
+        throw error;
+      }
       await watchCleanup;
       return { status: "online_context_changed" };
     } finally {
@@ -331,14 +369,20 @@ export function createDebugLiveTools(
           if (shutdown?.aborted) controller.abort();
           const monitor = monitorContext(2_000, onlineTarget);
           try {
-            const result = await reader.waitUntil({
-              condition: args.condition, timeoutMs: args.timeoutMs, stableForMs: args.stableForMs ?? 0,
-              ...notificationOptions(args), signal: controller.signal,
-            });
-            await close();
-            await monitor.stop();
-            await onlineTarget();
-            if (controller.signal.aborted) return { status: "online_context_changed" };
+            let result;
+            try {
+              result = await reader.waitUntil({
+                condition: args.condition, timeoutMs: args.timeoutMs, stableForMs: args.stableForMs ?? 0,
+                ...notificationOptions(args), signal: controller.signal,
+              });
+            } finally {
+              const stopping = boundCleanup(monitor.stop(), () => controller.abort());
+              try { await boundCleanup(close()); }
+              finally { await stopping; }
+            }
+            const after = controller.signal.aborted ? null : await onlineTarget();
+            if (!after || JSON.stringify(after) !== identity || controller.signal.aborted)
+              return { status: "online_context_changed" };
             const { status: waitStatus, conditionMatched, startedAt, completedAt, durationMs,
               timeoutMs, stableForMs, values } = result;
             return {
@@ -350,7 +394,6 @@ export function createDebugLiveTools(
               }),
             };
           } catch (error) {
-            await monitor.stop();
             if (controller.signal.aborted) return { status: "online_context_changed" };
             throw error;
           } finally {
@@ -382,7 +425,7 @@ export function createDebugLiveTools(
             return { status: "watch_limit_reached", maxWatches: maxSymbols };
           return performWatchOperation(session, () => session.reader.watchSymbol(name, {
             mode: options.mode ?? "on-change", ...notificationOptions(options),
-          }));
+          }), true);
         });
       },
     },
@@ -392,13 +435,12 @@ export function createDebugLiveTools(
       async execute(input) {
         const { name } = unwatchInput.parse(input);
         return withWatchAccess(target => {
-          if (watchContextChanged) return { status: "online_context_changed" };
           if (!approved(target, [name])) return { status: "symbol_not_approved" };
           const session = watchSession;
           if (session) return performWatchOperation(session, () => session.reader.unwatchSymbol(name));
           return { status: "succeeded", source: "ads_live", watch: { name, mode: "on-change",
             cycleTimeMs: DEFAULT_NOTIFICATION_CYCLE_TIME_MS, active: false } };
-        });
+        }, true);
       },
     },
     {
@@ -407,10 +449,9 @@ export function createDebugLiveTools(
       async execute(input) {
         emptyInput.parse(input);
         return withWatchAccess(() => {
-          if (watchContextChanged) return { status: "online_context_changed" };
           const watches = watchSession?.reader.listWatches().map(watchSnapshot) ?? [];
           return { status: "succeeded", source: "ads_live", watches, count: watches.length };
-        });
+        }, true);
       },
     },
   ];
