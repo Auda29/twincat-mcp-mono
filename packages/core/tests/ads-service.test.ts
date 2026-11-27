@@ -603,6 +603,36 @@ describe("AdsService", () => {
     await service.disconnect();
   });
 
+  it("cancels a watch registration while the ADS connection is pending", async () => {
+    const { AdsService } = await import("../src/ads-service.js");
+    const service = new AdsService({
+      connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+      writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+    });
+    const client = getMockClientByPort(851)!;
+    const connect = client.connect.bind(client);
+    let start!: () => void;
+    let resume!: () => void;
+    const started = new Promise<void>(resolve => { start = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    vi.spyOn(client, "connect").mockImplementationOnce(async () => {
+      start();
+      await gate;
+      return connect();
+    });
+    const subscribe = vi.spyOn(client, "subscribeValue");
+
+    const registration = service.watchValue("MAIN.watch");
+    await started;
+    expect(await service.unwatchValue("MAIN.watch")).toMatchObject({ active: false });
+    resume();
+
+    await expect(registration).rejects.toThrow("PLC watch registration was closed.");
+    expect(subscribe).not.toHaveBeenCalled();
+    expect(service.listWatches()).toEqual([]);
+    await service.disconnect();
+  });
+
   it("cancels a pending watch registration when the symbol is unwatched", async () => {
     const { AdsService } = await import("../src/ads-service.js");
     const service = new AdsService({
@@ -688,6 +718,34 @@ describe("AdsService", () => {
       expect(disconnectNc).toHaveBeenCalledOnce();
       await closing;
       expect(service.listWatches()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forces the ADS transport closed when cached handle deletion stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const { AdsService } = await import("../src/ads-service.js");
+      const service = new AdsService({
+        connectionMode: "router", targetAmsNetId: "192.168.1.120.1.1", targetAdsPort: 851, readOnly: true,
+        writeAllowlist: [], contextSnapshotSymbols: [], notificationCycleTimeMs: 50, maxNotifications: 2,
+      }, { waitCleanupTimeoutMs: 25 });
+      const handle = await service.getOrCreateHandle("MAIN.value");
+      const client = getMockClientByPort(851)!;
+      const disconnect = vi.spyOn(client, "disconnect");
+      const deleteHandle = vi.spyOn(client, "deleteVariableHandle").mockReturnValueOnce(new Promise(() => {}));
+
+      const closing = service.disconnect();
+      await vi.advanceTimersByTimeAsync(24);
+      expect(deleteHandle).toHaveBeenCalledExactlyOnceWith(handle);
+      expect(disconnect).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(disconnect).toHaveBeenCalledExactlyOnceWith(true);
+      await closing;
+      expect(client.connection.connected).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();

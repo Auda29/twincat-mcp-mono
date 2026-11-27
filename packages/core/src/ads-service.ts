@@ -1319,25 +1319,30 @@ export class AdsService {
     this.#disconnectGeneration++;
     this.#watchRegistrations.clear();
     const watchEntries = [...this.#watchCache.values()];
+    const handles = [...this.#handleCache.values()];
     const cleanupErrors: Error[] = [];
-    let watchCleanupTimedOut = false;
-    if (watchEntries.length > 0) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const deadline = new Promise<void>(resolve => {
-        timer = setTimeout(() => {
-          watchCleanupTimedOut = true;
-          resolve();
-        }, this.dependencies.waitCleanupTimeoutMs ?? 2_000).unref();
-      });
-      const cleanup = Promise.allSettled(watchEntries.map(async watch => {
+    let cleanupTimedOut = false;
+    if (watchEntries.length > 0 || handles.length > 0) {
+      const runCleanup = async (operation: () => Promise<unknown>) => {
         try {
-          await this.#client.unsubscribe(watch.subscription);
+          await operation();
         } catch (error) {
           cleanupErrors.push(
             error instanceof Error ? error : new Error(String(error)),
           );
         }
-      }));
+      };
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<void>(resolve => {
+        timer = setTimeout(() => {
+          cleanupTimedOut = true;
+          resolve();
+        }, this.dependencies.waitCleanupTimeoutMs ?? 2_000).unref();
+      });
+      const cleanup = Promise.allSettled([
+        ...watchEntries.map(watch => runCleanup(() => this.#client.unsubscribe(watch.subscription))),
+        ...handles.map(handle => runCleanup(() => this.#client.deleteVariableHandle(handle))),
+      ]);
       try {
         await Promise.race([cleanup, deadline]);
       } finally {
@@ -1345,23 +1350,13 @@ export class AdsService {
       }
     }
 
-    for (const handle of this.#handleCache.values()) {
-      try {
-        await this.#client.deleteVariableHandle(handle);
-      } catch (error) {
-        cleanupErrors.push(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      }
-    }
-
     this.#watchCache.clear();
     this.#invalidateRuntimeCaches();
 
-    if (watchCleanupTimedOut || this.#client.connection.connected) {
+    if (cleanupTimedOut || this.#client.connection.connected) {
       try {
         // A graceful ADS disconnect retries any subscriptions still active.
-        await this.#client.disconnect(watchCleanupTimedOut);
+        await this.#client.disconnect(cleanupTimedOut);
       } catch (error) {
         cleanupErrors.push(
           error instanceof Error ? error : new Error(String(error)),
@@ -1937,8 +1932,6 @@ export class AdsService {
     },
   ): Promise<PlcWatchRegistration> {
     const generation = this.#disconnectGeneration;
-    await this.connect();
-    if (generation !== this.#disconnectGeneration) throw new Error("PLC watch registration was closed.");
 
     const existing = this.#watchCache.get(name);
     if (existing) {
@@ -1964,9 +1957,15 @@ export class AdsService {
       ...(callback === undefined ? {} : { callback }),
       ...(options?.maxDelayMs === undefined ? {} : { maxDelayMs: options.maxDelayMs }),
     };
-    const registration: Promise<PlcWatchRegistration> = this.#subscribeWatch(name, entry)
-      .then(subscription => {
-        if (this.#watchRegistrations.get(name) !== registration) {
+    const isCurrent = () =>
+      generation === this.#disconnectGeneration && this.#watchRegistrations.get(name) === registration;
+    const registration: Promise<PlcWatchRegistration> = Promise.resolve()
+      .then(async () => {
+        await this.connect();
+        if (!isCurrent()) throw new Error("PLC watch registration was closed.");
+
+        const subscription = await this.#subscribeWatch(name, entry);
+        if (!isCurrent()) {
           void Promise.resolve().then(() => this.#client.unsubscribe(subscription)).catch(() => {});
           throw new Error("PLC watch registration was closed.");
         }
